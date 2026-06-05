@@ -11,4 +11,10 @@ export async function register() {
   } catch (e) {
     console.error("[instrumentation] failed to start Blinkit auto-sync", e);
   }
+  try {
+    const { startInstamartAutoSync } = await import("@/lib/services/instamart-scheduler");
+    startInstamartAutoSync();
+  } catch (e) {
+    console.error("[instrumentation] failed to start Instamart auto-sync", e);
+  }
 }
