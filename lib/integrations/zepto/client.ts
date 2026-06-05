@@ -56,15 +56,17 @@ function renderZeptoBody(
       expiryEndDate: null,
     };
   }
+  // Quote-stripping replacements: '"{foo}"' removes surrounding JSON quotes so the
+  // placeholder becomes a bare integer. "{page}" emits 1-based page number.
   const filled = template
-    .replaceAll('"{page}"', String(vars.page))
-    .replaceAll('"{pageSize}"', String(vars.pageSize))
-    .replaceAll('"{offset}"', String(vars.offset))
+    .replaceAll('"{page}"', String(vars.page + 1))    // 1-based page number (integer)
+    .replaceAll('"{pageSize}"', String(vars.pageSize)) // integer
+    .replaceAll('"{offset}"', String(vars.offset))     // integer
     .replaceAll("{sinceISO}", toZeptoISO(vars.since))
     .replaceAll("{untilISO}", toZeptoISO(vars.until, true))
     .replaceAll("{since}", vars.since)
     .replaceAll("{until}", vars.until)
-    .replaceAll("{page}", String(vars.page))
+    .replaceAll("{page}", String(vars.page))           // 0-based
     .replaceAll("{pageSize}", String(vars.pageSize))
     .replaceAll("{offset}", String(vars.offset));
   const parsed = JSON.parse(filled) as unknown;

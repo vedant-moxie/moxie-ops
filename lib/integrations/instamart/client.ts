@@ -53,17 +53,22 @@ function renderBodyTemplate(
       query: { id: "", "ship_to_party.name": "" },
     };
   }
+  // Quote-stripping replacements: '"{foo}"' removes surrounding quotes so the
+  // placeholder becomes a bare JSON integer/number instead of a string.
+  // IMPORTANT: "{page}" injects the 1-based page number (page+1) because REST
+  // APIs that use page_number fields are universally 1-based. Use {page} (no
+  // surrounding quotes) if you need the raw 0-based loop variable.
   const filled = template
-    .replaceAll('"{page}"', String(vars.page))
-    .replaceAll('"{pageSize}"', String(vars.pageSize))
-    .replaceAll('"{offset}"', String(vars.offset))
+    .replaceAll('"{page}"', String(vars.page + 1))    // 1-based page number (integer)
+    .replaceAll('"{pageSize}"', String(vars.pageSize)) // integer
+    .replaceAll('"{offset}"', String(vars.offset))     // integer
     .replaceAll("{sinceEpochMs}", String(toISTEpochMs(vars.since)))
     .replaceAll("{untilEpochMs}", String(toISTEpochMs(vars.until, true)))
     .replaceAll("{sinceISO}", toISTIso(vars.since))
     .replaceAll("{untilISO}", toISTIso(vars.until, true))
     .replaceAll("{since}", vars.since)
     .replaceAll("{until}", vars.until)
-    .replaceAll("{page}", String(vars.page))
+    .replaceAll("{page}", String(vars.page))           // 0-based (for custom offset math)
     .replaceAll("{pageSize}", String(vars.pageSize))
     .replaceAll("{offset}", String(vars.offset));
   const parsed = JSON.parse(filled) as unknown;
@@ -144,33 +149,66 @@ export class InstamartClient {
    * Override via INSTAMART_PO_LIST_PATH / INSTAMART_PO_LIST_METHOD / INSTAMART_PO_LIST_BODY
    * if the portal returns a different endpoint or body shape.
    */
+  /**
+   * Page the PO-listing endpoint and return raw PO summary objects for the window.
+   *
+   * Defaults to POST picker.swiggy.com/api/v1/searchPurchaseOrder with abacus-token
+   * auth. The default body uses integer pagination (page_number: N, size: 50) and a
+   * single epoch lower-bound for order_dates.release_date (confirmed working via live
+   * probe — returns all POs on or after that date). Override body shape via
+   * INSTAMART_PO_LIST_BODY (placeholders: {since}/{until}/{page}/{pageSize}/{offset},
+   * or "{page}"/{pageSize}" for integer injection into JSON strings).
+   *
+   * Throws InstamartAPIError if the API body contains status_code != 0.
+   */
   async listPurchaseOrders(opts: { since: string; until: string; pageSize?: number; maxPages?: number }): Promise<Record<string, unknown>[]> {
     const path = env.INSTAMART_PO_LIST_PATH;
     if (!path) {
       throw new InstamartEndpointUnknown(
         "INSTAMART_PO_LIST_PATH is not set. Capture the PO grid XHR from the logged-in " +
-          "Swiggy Instamart Ads Portal (Network > Fetch/XHR > Copy as cURL) and set the path " +
-          "(+ INSTAMART_PO_LIST_METHOD / INSTAMART_PO_LIST_BODY / INSTAMART_PORTAL_COOKIE) " +
-          "so the client can page it.",
+          "Swiggy Instamart Ads Portal (Network > Fetch/XHR > Copy as cURL) and set the path.",
       );
     }
     const pageSize = opts.pageSize ?? 50;
-    const maxPages = opts.maxPages ?? 100;
+    const maxPages = opts.maxPages ?? 200;
     const usePost = env.INSTAMART_PO_LIST_METHOD === "POST";
     const out: Record<string, unknown>[] = [];
+    let total: number | null = null;
+
     for (let page = 0; page < maxPages; page++) {
       const vars = { since: opts.since, until: opts.until, page, pageSize, offset: page * pageSize };
-      const payload = usePost
-        ? await this.postJson(path, renderBodyTemplate(env.INSTAMART_PO_LIST_BODY, vars))
-        : await this.getJson(path, {
-            offset: page * pageSize,
-            limit: pageSize,
-            start_date: opts.since,
-            end_date: opts.until,
-          });
+      let payload: unknown;
+      if (usePost) {
+        const body = renderBodyTemplate(env.INSTAMART_PO_LIST_BODY, vars);
+        const res = await this.req(path, { method: "POST", headers: this.headers(), body: JSON.stringify(body) });
+        if (!res.ok) {
+          const txt = (await res.text()).slice(0, 400);
+          throw new InstamartAPIError(`POST ${path} failed: HTTP ${res.status} ${txt}`);
+        }
+        payload = await res.json().catch(() => ({}));
+        // Swiggy encodes errors as HTTP 200 with status_code:1 in body
+        if (isRecord(payload) && typeof payload.status_code === "number" && payload.status_code !== 0) {
+          throw new InstamartAPIError(
+            `POST ${path} API error: status_code=${payload.status_code} message=${String(payload.message ?? "")}`
+          );
+        }
+      } else {
+        payload = await this.getJson(path, { offset: page * pageSize, limit: pageSize, start_date: opts.since, end_date: opts.until });
+      }
+
+      // Extract total on first page for smarter stopping
+      if (page === 0 && isRecord(payload)) {
+        const data = isRecord(payload.data) ? payload.data : payload;
+        const t = data.total_number_of_purchase_order_records ?? data.total ?? data.totalCount;
+        if (typeof t === "number") total = t;
+      }
+
       const batch = extractList(payload);
       out.push(...batch);
+
+      const fetched = out.length;
       if (batch.length < pageSize) break;
+      if (total !== null && fetched >= total) break;
     }
     return out;
   }
