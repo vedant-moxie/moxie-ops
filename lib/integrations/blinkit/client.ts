@@ -128,6 +128,64 @@ export class BlinkitClient {
     return { content, filename };
   }
 
+  /**
+   * Download the PDF for a single partnersbiz PO.
+   * Handles both a direct binary response and a JSON envelope with download_url.
+   * Throws BlinkitAuthExpired on 401/403, BlinkitAPIError on other failures.
+   */
+  async downloadPoPdf(poId: string): Promise<{ content: Buffer; filename: string }> {
+    return this.downloadPoDocument(poId, "pdf");
+  }
+
+  /**
+   * Download the Excel for a single partnersbiz PO.
+   * Tries /excel/ first, falls back to /xlsx/ if the first path returns 404.
+   */
+  async downloadPoExcel(poId: string): Promise<{ content: Buffer; filename: string }> {
+    try {
+      return await this.downloadPoDocument(poId, "excel");
+    } catch (err) {
+      if (err instanceof BlinkitAPIError && /404/.test(String(err.message))) {
+        return this.downloadPoDocument(poId, "xlsx");
+      }
+      throw err;
+    }
+  }
+
+  private async downloadPoDocument(
+    poId: string,
+    fmt: "pdf" | "excel" | "xlsx",
+  ): Promise<{ content: Buffer; filename: string }> {
+    const path = `/v1/client-po-details/${poId}/${fmt}/`;
+    const res = await this.req(path, { method: "GET", headers: this.headers() });
+    if (!res.ok) {
+      throw new BlinkitAPIError(`PO ${fmt} ${poId} failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+    }
+    const contentType = res.headers.get("content-type") ?? "";
+    // If the response is JSON it may be an envelope with a presigned URL (like downloadRequest).
+    if (contentType.includes("application/json") || contentType.includes("text/plain")) {
+      const inner = peelEnvelope(await res.json().catch(() => ({})));
+      const downloadUrl = isRecord(inner) ? inner.download_url ?? inner.url : null;
+      if (typeof downloadUrl === "string" && downloadUrl) {
+        const s3 = await fetch(downloadUrl);
+        if (!s3.ok) throw new BlinkitAPIError(`PO ${fmt} ${poId} S3 fetch failed: HTTP ${s3.status}`);
+        const content = Buffer.from(await s3.arrayBuffer());
+        const filename =
+          parseContentDisposition(s3.headers.get("content-disposition") ?? "") ??
+          new URL(downloadUrl).pathname.split("/").pop() ??
+          `${poId}.${fmt === "xlsx" ? "xlsx" : fmt}`;
+        return { content, filename };
+      }
+      throw new BlinkitAPIError(`PO ${fmt} ${poId}: unexpected JSON response without download_url`);
+    }
+    // Direct binary response
+    const content = Buffer.from(await res.arrayBuffer());
+    const filename =
+      parseContentDisposition(res.headers.get("content-disposition") ?? "") ??
+      `${poId}.${fmt === "xlsx" ? "xlsx" : fmt}`;
+    return { content, filename };
+  }
+
   /** Trigger → poll → download. Returns the report file bytes. */
   async runReport(opts: {
     triggerPath: string;
