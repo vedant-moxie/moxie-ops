@@ -32,7 +32,16 @@ function renderZeptoBody(
   vars: { since: string; until: string; page: number; pageSize: number; offset: number },
 ): Record<string, unknown> {
   if (!template) {
-    return { filters: { from: vars.since, to: vars.until }, page: vars.page, pageSize: vars.pageSize };
+    // Best-effort default body for fcc.zepto.co.in/api/v1/po/filter.
+    // Set ZEPTO_PO_LIST_BODY to a captured body template to override.
+    return {
+      startDate: vars.since,
+      endDate: vars.until,
+      page: vars.page,
+      pageSize: vars.pageSize,
+      poStatus: null,
+      poNumber: null,
+    };
   }
   const filled = template
     .replaceAll('"{page}"', String(vars.page))
@@ -95,19 +104,21 @@ export class ZeptoClient {
   constructor(private tokens: ZeptoTokens) {}
 
   private headers(): Record<string, string> {
-    const tokenType = this.tokens.tokenType || "Bearer";
     const h: Record<string, string> = {
       accept: "application/json, text/plain, */*",
       "accept-language": "en-US,en;q=0.9,hi;q=0.8",
       "content-type": "application/json",
-      origin: "https://partner.zepto.co.in",
-      referer: "https://partner.zepto.co.in/",
+      origin: "https://brands.zepto.co.in",
+      referer: "https://brands.zepto.co.in/",
       "user-agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
-      authorization: `${tokenType} ${this.tokens.accessToken}`,
+      // fcc.zepto.co.in expects the raw HS256 jwtToken with NO "Bearer " prefix.
+      authorization: this.tokens.accessToken,
+      // brands.zepto.co.in sends this proxy header; include it for compatibility.
+      "x-proxy-target": "brand-analytics",
     };
-    // The data host (fcc.zepto.co.in) may authorize via session cookie in addition to
-    // the Bearer jwtToken — supply the captured cURL's Cookie header when needed.
+    // x-aws-waf-token is browser-minted — probing confirmed it is NOT required for
+    // server-to-server requests. ZEPTO_PORTAL_COOKIE kept as optional fallback.
     if (env.ZEPTO_PORTAL_COOKIE) h.cookie = env.ZEPTO_PORTAL_COOKIE;
     return h;
   }

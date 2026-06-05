@@ -77,11 +77,22 @@ async function save(tokens: ZeptoTokens): Promise<void> {
   });
 }
 
-/** Return cached tokens unless forcing a refresh; otherwise run the OTP login. */
+/**
+ * Return tokens for Zepto data calls. Priority order:
+ * 1. Cached DB token (unless forceRefresh)
+ * 2. ZEPTO_PORTAL_TOKEN env var (browser-captured HS256 JWT fallback)
+ * 3. OTP login with the brands.zepto.co.in applicationId (d0cd4873)
+ */
 export async function getTokens(forceRefresh = false): Promise<ZeptoTokens> {
   if (!forceRefresh) {
     const cached = await loadCached();
     if (cached?.accessToken) return cached;
+  }
+  // Fast-path: use the pre-captured portal token when OTP login isn't available.
+  if (env.ZEPTO_PORTAL_TOKEN) {
+    const tokens: ZeptoTokens = { accessToken: env.ZEPTO_PORTAL_TOKEN, tokenType: "" };
+    if (!forceRefresh) await save(tokens);
+    return tokens;
   }
   return login();
 }

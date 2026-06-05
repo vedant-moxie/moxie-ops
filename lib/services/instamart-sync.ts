@@ -7,7 +7,7 @@ import { ingestInstamartRows, type IngestSummary } from "@/lib/services/instamar
 
 const IST_OFFSET_MS = 5.5 * 3_600_000;
 
-/** Raised when sync is invoked before the PO-grid endpoint has been configured. */
+/** @deprecated The PO endpoint now has a sensible default — this is kept for API compatibility. */
 export class InstamartSyncNotConfigured extends Error {}
 
 /** A date N days ago in IST as YYYY-MM-DD. */
@@ -90,14 +90,6 @@ function toSheet(pos: Record<string, unknown>[]): ParsedSheet {
 export async function syncInstamart(opts: { since?: string; until?: string; actorLabel?: string } = {}): Promise<SyncResult> {
   const since = opts.since ?? maxDate(istDaysAgo(30), env.INSTAMART_START_DATE);
   const until = opts.until ?? istDaysAgo(-1); // tomorrow IST so today's POs are caught (inclusive upper bound)
-
-  // Fail fast (before spending an OTP login) if the PO-grid endpoint isn't wired
-  // up yet. Auth is verified end-to-end; only the captured portal cURL is missing.
-  if (!env.INSTAMART_PO_LIST_PATH) {
-    throw new InstamartSyncNotConfigured(
-      "Instamart PO endpoint not configured yet — paste the portal PO-grid cURL to enable sync (auth works).",
-    );
-  }
 
   const runOnce = async (forceRefresh: boolean) => {
     const tokens = await getTokens(forceRefresh);

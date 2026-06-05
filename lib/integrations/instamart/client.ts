@@ -23,9 +23,20 @@ function renderBodyTemplate(
   vars: { since: string; until: string; page: number; pageSize: number; offset: number },
 ): Record<string, unknown> {
   if (!template) {
+    // Best-effort default body for picker.swiggy.com/api/v1/searchPurchaseOrder.
+    // brandCompanyId is the account UUID from the ozone-idp JWT (INSTAMART_ACCOUNT_ID).
+    // Set INSTAMART_PO_LIST_BODY to a captured body template to override.
     return {
-      filters: { startDate: vars.since, endDate: vars.until },
-      pagination: { offset: vars.offset, limit: vars.pageSize, page: vars.page, pageSize: vars.pageSize },
+      brandCompanyId: env.INSTAMART_ACCOUNT_ID,
+      startDate: vars.since,
+      endDate: vars.until,
+      page: vars.page,
+      pageSize: vars.pageSize,
+      poStatus: null,
+      poNumber: null,
+      searchText: null,
+      sortField: "poCreatedDate",
+      sortOrder: "DESC",
     };
   }
   const filled = template
@@ -44,38 +55,35 @@ function renderBodyTemplate(
 
 /**
  * Client for the Swiggy Instamart brand/seller portal data APIs. Authenticates
- * with the OTP access token as `Authorization: Bearer …` (the portal XHRs use
- * this). Mirrors BlinkitClient: a thin `req()` that flags expired auth so the
- * sync layer can re-login once.
+ * with the OTP access_token in the `abacus-token` header (NOT Authorization:
+ * Bearer). The PO search endpoint lives on picker.swiggy.com (POST) and
+ * authorizes off the same ozone-idp JWT our OTP login produces.
  *
- * NOTE: the reference auth script (main.js) covers login only — it does NOT
- * include the PO/orders data endpoints. Those live on the seller portal and
- * authorize off the Bearer token. The grid path is configured via
- * INSTAMART_PO_LIST_PATH (captured from the portal's Network tab Copy-as-cURL).
- * Until set, the PO methods throw InstamartEndpointUnknown with guidance.
+ * The PO list endpoint and POST body are configured via env:
+ *   INSTAMART_PO_LIST_PATH   — full URL (defaults to picker.swiggy.com endpoint)
+ *   INSTAMART_PO_LIST_METHOD — GET or POST (default POST)
+ *   INSTAMART_PO_LIST_BODY   — JSON template; placeholders {since}/{until}/{page}/{pageSize}/{offset}
+ *   INSTAMART_ACCOUNT_ID     — brandCompanyId / supplierId from the ozone-idp JWT
  */
 export class InstamartClient {
   constructor(private tokens: InstamartTokens) {}
 
   private headers(): Record<string, string> {
-    const h: Record<string, string> = {
+    return {
       accept: "application/json, text/plain, */*",
       "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
       app_version: env.INSTAMART_APP_VERSION,
-      authorization: `Bearer ${this.tokens.accessToken}`,
+      // The picker.swiggy.com PO endpoint authorizes off the `abacus-token` custom
+      // header (same JWT our OTP login produces — NOT a Bearer token).
+      "abacus-token": this.tokens.accessToken,
       "content-type": "application/json",
-      origin: "https://partner.swiggy.com",
-      referer: "https://partner.swiggy.com/",
+      origin: "https://partner.instamart.in",
+      referer: "https://partner.instamart.in/",
       "user-agent":
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
       "x-client-request-id": randomUUID(),
       "x-timestamp": Date.now().toString(),
     };
-    // picker.swiggy.com authorizes off the portal SESSION cookie, not the ozone IDP
-    // Bearer token (it rejects Bearer with "Token missing"). When the captured cURL's
-    // Cookie header is supplied, send it so the data host accepts the request.
-    if (env.INSTAMART_PORTAL_COOKIE) h.cookie = env.INSTAMART_PORTAL_COOKIE;
-    return h;
   }
 
   private url(path: string): string {
@@ -113,12 +121,10 @@ export class InstamartClient {
   /**
    * Page the PO-listing endpoint and return raw PO summary objects for the window.
    *
-   * The endpoint (INSTAMART_PO_LIST_PATH) may be a FULL URL on a host different from
-   * the auth host — the PO search lives on picker.swiggy.com/api/v1/searchPurchaseOrder
-   * (POST), not partner.swiggy.com. Method is driven by INSTAMART_PO_LIST_METHOD and,
-   * for POST, the request body by the INSTAMART_PO_LIST_BODY template (placeholders
-   * {since}/{until}/{page}/{pageSize}/{offset}). When no template is given a sensible
-   * default body is sent. This makes the captured cURL a drop-in: paste path + body.
+   * Defaults to POST picker.swiggy.com/api/v1/searchPurchaseOrder with abacus-token
+   * auth and a body that includes brandCompanyId (INSTAMART_ACCOUNT_ID).
+   * Override via INSTAMART_PO_LIST_PATH / INSTAMART_PO_LIST_METHOD / INSTAMART_PO_LIST_BODY
+   * if the portal returns a different endpoint or body shape.
    */
   async listPurchaseOrders(opts: { since: string; until: string; pageSize?: number; maxPages?: number }): Promise<Record<string, unknown>[]> {
     const path = env.INSTAMART_PO_LIST_PATH;

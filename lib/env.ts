@@ -73,24 +73,28 @@ const schema = z.object({
   BLINKIT_OTP_APP_PASSWORD: z.string().optional(),
   OTP_IMAP_HOST: z.string().default("imap.gmail.com"),
 
-  // Zepto / partner.zepto.co.in live scraping (mirrors the Blinkit block above)
+  // Zepto / brands.zepto.co.in live scraping (mirrors the Blinkit block above)
+  // Auth host (cx.zepto.co.in) — sign-in + OTP validation happen here.
   ZEPTO_BASE_URL: z.string().default("https://cx.zepto.co.in"),
-  // Application id the partner portal signs in against (public web constant).
-  ZEPTO_APPLICATION_ID: z.string().default("59b80e60-05bd-45c2-a334-d5ae76c2bb32"),
+  // Application id the brands portal (brands.zepto.co.in) signs in against.
+  // d0cd4873 is the confirmed working app (cx 59b80e60 returns 1003).
+  ZEPTO_APPLICATION_ID: z.string().default("d0cd4873-7cb3-4c7c-9a25-3b109a0d2301"),
   ZEPTO_LOGIN_EMAIL: z.string().optional(), // Zepto portal account; OTP is sent for this user
   ZEPTO_PASSWORD: z.string().optional(), // Zepto portal password (sign-in body)
   ZEPTO_START_DATE: z.string().default("2026-06-01"), // backfill floor
-  // PO-listing endpoint captured from the logged-in portal. May be a FULL URL on a
-  // different host than ZEPTO_BASE_URL (the data API lives on fcc.zepto.co.in, not the
-  // auth host cx.zepto.co.in) — e.g. "https://fcc.zepto.co.in/api/v1/po/filter".
-  ZEPTO_PO_LIST_PATH: z.string().optional(),
+  // Fallback HS256 jwtToken from a browser-captured request when OTP login is blocked.
+  // Set ZEPTO_PORTAL_TOKEN to bypass the login flow and use this token directly.
+  ZEPTO_PORTAL_TOKEN: z.string().optional(),
+  // PO-listing endpoint. Defaults to the confirmed working brands-app data host.
+  ZEPTO_PO_LIST_PATH: z.string().default("https://fcc.zepto.co.in/api/v1/po/filter"),
   // HTTP method for the PO-list endpoint. fcc.zepto.co.in/api/v1/po/filter is POST.
-  ZEPTO_PO_LIST_METHOD: z.enum(["GET", "POST"]).default("GET"),
-  // Optional POST body template (JSON). Placeholders {since} {until} {page} {pageSize}
-  // {offset} are substituted per request. Paste the exact body from the captured cURL.
+  ZEPTO_PO_LIST_METHOD: z.enum(["GET", "POST"]).default("POST"),
+  // POST body template (JSON). Placeholders {since} {until} {page} {pageSize} {offset}.
+  // The client sends a best-effort default body; override with the exact captured body
+  // if the server rejects the default (field names are proprietary and undocumented).
   ZEPTO_PO_LIST_BODY: z.string().optional(),
-  // Optional raw Cookie header when the data host authorizes via session cookie rather
-  // than (or in addition to) the Bearer jwtToken. Paste from the captured cURL.
+  // Cookie header — x-aws-waf-token is NOT required (probed and confirmed). Kept as
+  // optional fallback in case the endpoint adds WAF enforcement later.
   ZEPTO_PORTAL_COOKIE: z.string().optional(),
   ZEPTO_PO_DETAIL_PATH: z.string().optional(), // optional per-PO line-items endpoint (use {poId})
   // Background auto-sync (runs while the app is up)
@@ -104,8 +108,8 @@ const schema = z.object({
   // OTP-only login: a verification code is emailed to INSTAMART_LOGIN_EMAIL, which
   // MUST be the monitored inbox so the IMAP reader can pick it up.
   INSTAMART_BASE_URL: z.string().default("https://ozone-idp-brands-im-kba.swiggy.com/v1/accounts"),
-  // Swiggy brand/seller portal host the PO grid + line-item APIs live behind (Bearer auth).
-  INSTAMART_API_BASE_URL: z.string().default("https://partner.swiggy.com"),
+  // PO data endpoint host (picker.swiggy.com). Different from the auth host.
+  INSTAMART_API_BASE_URL: z.string().default("https://picker.swiggy.com"),
   INSTAMART_CLIENT_ID: z.string().default("f4e72b9a-5fde-4d1a-9e74-0237bcf4d67f"),
   INSTAMART_APP_VERSION: z.string().default("1.4.67"),
   INSTAMART_LOGIN_EMAIL: z.string().optional(), // OTP arrives here; must equal the monitored inbox
@@ -115,19 +119,18 @@ const schema = z.object({
   INSTAMART_OTP_APP_PASSWORD: z.string().optional(),
   // Only ingest POs whose manufacturer/brand contains this (case-insensitive). Empty = no filter.
   INSTAMART_MANUFACTURER_FILTER: z.string().default(""),
-  // PO grid endpoint captured from the logged-in portal. May be a FULL URL on a
-  // different host than INSTAMART_API_BASE_URL — the PO search lives on
-  // picker.swiggy.com, NOT partner.swiggy.com — e.g.
-  // "https://picker.swiggy.com/api/v1/searchPurchaseOrder".
-  INSTAMART_PO_LIST_PATH: z.string().optional(),
+  // ozone-idp account UUID from the JWT claims.account_ids (used as brandCompanyId in PO body).
+  INSTAMART_ACCOUNT_ID: z.string().default("75a429de-dc67-44d2-b41d-608ce5e8a7f1"),
+  // PO grid endpoint. Defaults to the confirmed working host/path (abacus-token auth, POST).
+  INSTAMART_PO_LIST_PATH: z.string().default("https://picker.swiggy.com/api/v1/searchPurchaseOrder"),
   // HTTP method for the PO-list endpoint. picker.swiggy.com/searchPurchaseOrder is POST.
-  INSTAMART_PO_LIST_METHOD: z.enum(["GET", "POST"]).default("GET"),
-  // Optional POST body template (JSON). Placeholders {since} {until} {page} {pageSize}
-  // {offset} are substituted per request. Paste the exact body from the captured cURL.
+  INSTAMART_PO_LIST_METHOD: z.enum(["GET", "POST"]).default("POST"),
+  // POST body template (JSON). Placeholders {since} {until} {page} {pageSize} {offset}.
+  // The client builds a sensible default using INSTAMART_ACCOUNT_ID; override here if
+  // the server rejects the default body (paste the exact body from a fresh browser capture).
   INSTAMART_PO_LIST_BODY: z.string().optional(),
-  // Optional raw Cookie header. picker.swiggy.com authorizes off the portal SESSION
-  // cookie (it rejects the ozone IDP Bearer token with "Token missing"), so the captured
-  // cURL's Cookie header is required to drive it. Paste it here.
+  // Cookie header — no longer required; abacus-token replaces cookie auth. Kept for
+  // fallback in case a different portal host still needs it.
   INSTAMART_PORTAL_COOKIE: z.string().optional(),
   INSTAMART_PO_DETAIL_PATH: z.string().optional(),
   // Background auto-sync (runs while the app is up)
