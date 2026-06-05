@@ -21,32 +21,47 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+/** Convert YYYY-MM-DD to ISO timestamp at midnight IST (= previous day 18:30:00 UTC). */
+function toZeptoISO(date: string, end = false): string {
+  const parts = date.split("-").map(Number);
+  const [y, m, d] = [parts[0]!, parts[1]!, parts[2]!];
+  const ms = Date.UTC(y, m - 1, d) - 5.5 * 3_600_000 + (end ? 86_400_000 - 1 : 0);
+  return new Date(ms).toISOString();
+}
+
 /**
- * Build the POST body for the PO-filter endpoint from an optional JSON template,
- * substituting {since} {until} {page} {pageSize} {offset}. Quoted numeric
- * placeholders (e.g. "page":"{page}") collapse to real numbers. Falls back to a
- * default filter+pagination shape when no template is configured.
+ * Build the POST body for fcc.zepto.co.in/api/v1/po/filter from an optional template.
+ * Substitutes {since} {until} {page} {pageSize} {offset} {sinceISO} {untilISO}.
+ * Falls back to the captured default body shape (all statuses, offset pagination).
  */
 function renderZeptoBody(
   template: string | undefined,
   vars: { since: string; until: string; page: number; pageSize: number; offset: number },
 ): Record<string, unknown> {
   if (!template) {
-    // Best-effort default body for fcc.zepto.co.in/api/v1/po/filter.
-    // Set ZEPTO_PO_LIST_BODY to a captured body template to override.
+    // Default body shape captured from fcc.zepto.co.in/api/v1/po/filter.
+    // Uses ISO timestamps (midnight/end-of-day IST) and offset-based pagination.
     return {
-      startDate: vars.since,
-      endDate: vars.until,
-      page: vars.page,
-      pageSize: vars.pageSize,
-      poStatus: null,
-      poNumber: null,
+      vendorCodes: [],
+      locationCodes: [],
+      poStartDate: toZeptoISO(vars.since),
+      poEndDate: toZeptoISO(vars.until, true),
+      offset: vars.offset,
+      limit: vars.pageSize,
+      statusList: [], // empty = all statuses; portal default was ["PENDING_ACKNOWLEDGEMENT"]
+      ids: [],
+      scheduledStartDate: null,
+      scheduledEndDate: null,
+      expiryStartDate: null,
+      expiryEndDate: null,
     };
   }
   const filled = template
     .replaceAll('"{page}"', String(vars.page))
     .replaceAll('"{pageSize}"', String(vars.pageSize))
     .replaceAll('"{offset}"', String(vars.offset))
+    .replaceAll("{sinceISO}", toZeptoISO(vars.since))
+    .replaceAll("{untilISO}", toZeptoISO(vars.until, true))
     .replaceAll("{since}", vars.since)
     .replaceAll("{until}", vars.until)
     .replaceAll("{page}", String(vars.page))
@@ -65,7 +80,7 @@ function extractRecords(payload: unknown, depth = 0): RawZeptoPo[] {
   }
   if (isRecord(payload)) {
     // Common list keys first, then any nested array of objects.
-    for (const k of ["purchaseOrders", "pos", "orders", "items", "records", "results", "rows", "content", "data"]) {
+    for (const k of ["poList", "purchaseOrders", "pos", "orders", "items", "records", "results", "rows", "content", "data"]) {
       const v = payload[k];
       if (Array.isArray(v) && v.some(isRecord)) return v.filter(isRecord);
     }

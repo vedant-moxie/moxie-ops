@@ -12,37 +12,55 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+/** Convert YYYY-MM-DD to epoch milliseconds at midnight IST (UTC+5:30). */
+function toISTEpochMs(date: string, end = false): number {
+  // IST = UTC+5:30; midnight IST = previous day 18:30:00 UTC
+  const parts = date.split("-").map(Number);
+  const [y, m, d] = [parts[0]!, parts[1]!, parts[2]!];
+  const ms = Date.UTC(y, m - 1, d) - 5.5 * 3_600_000;
+  return end ? ms + 86_400_000 - 1 : ms;
+}
+
+/** Convert YYYY-MM-DD to ISO timestamp at midnight IST (UTC+5:30). */
+function toISTIso(date: string, end = false): string {
+  const ms = toISTEpochMs(date, end);
+  return new Date(ms).toISOString().replace(/\.000Z$/, ".000Z");
+}
+
 /**
- * Build a POST body from an optional JSON template, substituting {since} {until}
- * {page} {pageSize} {offset}. Numeric placeholders that stand alone become real
- * numbers (e.g. "page":{page} → "page":0). Falls back to a sensible default shape
- * when no template is configured.
+ * Build a POST body from an optional JSON template. Substitutes:
+ *   {since} {until}         — YYYY-MM-DD date strings
+ *   {page} {pageSize} {offset} — numeric (also '"{x}"' for JSON-number coercion)
+ *   {sinceEpochMs} {untilEpochMs} — epoch ms at midnight/end-of-day IST
+ *   {sinceISO} {untilISO}   — ISO timestamp strings at midnight/end-of-day IST
+ * Falls back to the captured default body shape when no template is configured.
  */
 function renderBodyTemplate(
   template: string | undefined,
   vars: { since: string; until: string; page: number; pageSize: number; offset: number },
 ): Record<string, unknown> {
   if (!template) {
-    // Best-effort default body for picker.swiggy.com/api/v1/searchPurchaseOrder.
-    // brandCompanyId is the account UUID from the ozone-idp JWT (INSTAMART_ACCOUNT_ID).
-    // Set INSTAMART_PO_LIST_BODY to a captured body template to override.
+    // Default body shape captured from picker.swiggy.com/api/v1/searchPurchaseOrder.
+    // Uses INSTAMART_BRAND_COMPANY_ID (SHA-1 internal hash) + epoch ms date filter.
     return {
-      brandCompanyId: env.INSTAMART_ACCOUNT_ID,
-      startDate: vars.since,
-      endDate: vars.until,
-      page: vars.page,
-      pageSize: vars.pageSize,
-      poStatus: null,
-      poNumber: null,
-      searchText: null,
-      sortField: "poCreatedDate",
-      sortOrder: "DESC",
+      filters: {
+        "order_dates.release_date": toISTEpochMs(vars.since),
+        "brand_company_id": env.INSTAMART_BRAND_COMPANY_ID,
+        "selling_party.id": "",
+      },
+      pagination: { page_number: vars.page + 1, size: vars.pageSize },
+      sort: [{ sort_by: "pending_qty", sort_order: "DESC" }],
+      query: { id: "", "ship_to_party.name": "" },
     };
   }
   const filled = template
     .replaceAll('"{page}"', String(vars.page))
     .replaceAll('"{pageSize}"', String(vars.pageSize))
     .replaceAll('"{offset}"', String(vars.offset))
+    .replaceAll("{sinceEpochMs}", String(toISTEpochMs(vars.since)))
+    .replaceAll("{untilEpochMs}", String(toISTEpochMs(vars.until, true)))
+    .replaceAll("{sinceISO}", toISTIso(vars.since))
+    .replaceAll("{untilISO}", toISTIso(vars.until, true))
     .replaceAll("{since}", vars.since)
     .replaceAll("{until}", vars.until)
     .replaceAll("{page}", String(vars.page))

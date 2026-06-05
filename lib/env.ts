@@ -74,8 +74,9 @@ const schema = z.object({
   OTP_IMAP_HOST: z.string().default("imap.gmail.com"),
 
   // Zepto / brands.zepto.co.in live scraping (mirrors the Blinkit block above)
-  // Auth host (cx.zepto.co.in) — sign-in + OTP validation happen here.
-  ZEPTO_BASE_URL: z.string().default("https://cx.zepto.co.in"),
+  // Auth host for the brands app — sign-in + OTP validation happen on fcc.zepto.co.in.
+  // (cx.zepto.co.in is a different app that returned 1003 "not approved".)
+  ZEPTO_BASE_URL: z.string().default("https://fcc.zepto.co.in"),
   // Application id the brands portal (brands.zepto.co.in) signs in against.
   // d0cd4873 is the confirmed working app (cx 59b80e60 returns 1003).
   ZEPTO_APPLICATION_ID: z.string().default("d0cd4873-7cb3-4c7c-9a25-3b109a0d2301"),
@@ -119,8 +120,12 @@ const schema = z.object({
   INSTAMART_OTP_APP_PASSWORD: z.string().optional(),
   // Only ingest POs whose manufacturer/brand contains this (case-insensitive). Empty = no filter.
   INSTAMART_MANUFACTURER_FILTER: z.string().default(""),
-  // ozone-idp account UUID from the JWT claims.account_ids (used as brandCompanyId in PO body).
+  // ozone-idp account UUID from the JWT claims.account_ids (kept for reference).
   INSTAMART_ACCOUNT_ID: z.string().default("75a429de-dc67-44d2-b41d-608ce5e8a7f1"),
+  // Internal SHA-1 hash used as brand_company_id in the searchPurchaseOrder body.
+  // This is NOT the ozone-idp UUID — it's Swiggy's internal identifier for the brand.
+  // Captured from the live browser request (filters.brand_company_id field).
+  INSTAMART_BRAND_COMPANY_ID: z.string().default(""),
   // PO grid endpoint. Defaults to the confirmed working host/path (abacus-token auth, POST).
   INSTAMART_PO_LIST_PATH: z.string().default("https://picker.swiggy.com/api/v1/searchPurchaseOrder"),
   // HTTP method for the PO-list endpoint. picker.swiggy.com/searchPurchaseOrder is POST.
