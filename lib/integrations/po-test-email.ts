@@ -12,12 +12,19 @@ export interface PoEmailLine {
   qty: number;
 }
 
+export interface EmailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType: string;
+}
+
 export interface PoEmailData {
   poNumber: string;
   channel: string;
   location: string;
   dispatchFrom: string;
   lines: PoEmailLine[];
+  attachments?: EmailAttachment[];
 }
 
 function buildHtml(d: PoEmailData): string {
@@ -91,6 +98,11 @@ export async function sendPoPreparationEmail(data: PoEmailData): Promise<PoPrepa
     subject: `Please prepare the mentioned PO - ${data.poNumber}`,
     html: buildHtml(data),
     text: buildText(data),
+    attachments: data.attachments?.map((a) => ({
+      filename: a.filename,
+      content: a.content,
+      contentType: a.contentType,
+    })),
   });
 
   return { messageId: info.messageId as string, to };

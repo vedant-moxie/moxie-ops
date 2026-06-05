@@ -10,7 +10,7 @@ import {
 } from "recharts";
 import {
   Package, IndianRupee, Boxes, Store, RefreshCw, Upload, ChevronDown,
-  ChevronRight, FileSpreadsheet, Loader2,
+  ChevronRight, FileSpreadsheet, Loader2, Mail,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -87,6 +87,27 @@ export function ChannelDashboard({
     }
   }
 
+  async function sendTestEmail() {
+    setBusy("testemail");
+    const t = toast.loading("Sending test PO email…");
+    try {
+      const res = await fetch(`/api/blinkit/test-email`, { method: "POST" });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || "Send failed");
+      const d = json.data;
+      if (!d.sent) throw new Error(d.error || "Send failed");
+      const files = (d.attachedFiles as string[]).join(", ") || "none";
+      toast.success(
+        `Sent PO ${d.poNumber} · dispatchFrom: ${d.dispatchFrom} · attachments: ${files}`,
+        { id: t },
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Send failed", { id: t });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function uploadFile(file: File) {
     setBusy("upload");
     try {
@@ -141,6 +162,12 @@ export function ChannelDashboard({
         {busy === "scan" || pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
         Sync from {channel.name}
       </Button>
+      {channel.slug === "blinkit" && (
+        <Button variant="outline" size="sm" onClick={sendTestEmail} disabled={!!busy}>
+          {busy === "testemail" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+          Send test email
+        </Button>
+      )}
     </div>
   );
 

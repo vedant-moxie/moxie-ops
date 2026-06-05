@@ -62,6 +62,7 @@ export function warehouseInstructionEmail(input: {
   channelPoNumber: string;
   deliveryAddress: string;
   dispatchBy: string;
+  dispatchFrom?: string;
   warehouseInstructionId: string;
   lines: { internalCode: string; skuName: string; qty: number; casePacks: number }[];
 }): { subject: string; html: string; text: string } {
@@ -85,6 +86,7 @@ export function warehouseInstructionEmail(input: {
        <tr><td style="padding:2px 8px;color:#7a766a">PO Number</td><td style="padding:2px 8px;font-weight:600">${input.channelPoNumber}</td></tr>
        <tr><td style="padding:2px 8px;color:#7a766a">Delivery Address</td><td style="padding:2px 8px">${input.deliveryAddress}</td></tr>
        <tr><td style="padding:2px 8px;color:#7a766a">Dispatch By</td><td style="padding:2px 8px;font-weight:600">${input.dispatchBy}</td></tr>
+       ${input.dispatchFrom ? `<tr><td style="padding:2px 8px;color:#7a766a">Dispatch From</td><td style="padding:2px 8px;font-weight:600">${input.dispatchFrom}</td></tr>` : ""}
      </tbody></table>
      <h3 style="font-size:14px;margin:16px 0 4px">Picking List</h3>
      <table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -98,7 +100,7 @@ export function warehouseInstructionEmail(input: {
   );
   const text = `Dispatch Instruction — PO ${input.channelPoNumber} (${input.channelName})
 Delivery: ${input.deliveryAddress}
-Dispatch By: ${input.dispatchBy}
+Dispatch By: ${input.dispatchBy}${input.dispatchFrom ? `\nDispatch From: ${input.dispatchFrom}` : ""}
 
 ${input.lines.map((l) => `${l.internalCode}  ${l.skuName}  qty ${l.qty} (${l.casePacks} case packs)`).join("\n")}
 

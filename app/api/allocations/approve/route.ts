@@ -8,6 +8,8 @@ import { writeAudit } from "@/lib/services/audit";
 import { sendEmail, warehouseInstructionEmail } from "@/lib/integrations/resend";
 import { invalidateAtpCache } from "@/lib/integrations/sheets";
 import { roundToCasePack, formatDate } from "@/lib/utils";
+import { getPoDocuments, extractGstinFromPdf } from "@/lib/services/po-documents";
+import { resolveDispatchFromGstins } from "@/lib/services/po-documents-helpers";
 
 export const dynamic = "force-dynamic";
 
@@ -81,11 +83,36 @@ export async function POST(req: NextRequest) {
           ),
         }));
 
+      // Fetch PDF + Excel once; derive dispatch-from from the PDF GSTIN (non-fatal on failure)
+      let dispatchFrom: string | undefined;
+      const attachments: { filename: string; content: Buffer }[] = [];
+      try {
+        const docs = await getPoDocuments(po);
+        if (docs.pdf) {
+          attachments.push({ filename: docs.pdf.filename, content: docs.pdf.content });
+          try {
+            const gstins = await extractGstinFromPdf(docs.pdf.content);
+            const resolved = resolveDispatchFromGstins(gstins);
+            if (resolved.dispatchFrom) dispatchFrom = resolved.dispatchFrom;
+            if (resolved.warning) console.warn(`[approve] dispatchFrom for ${po.id}:`, resolved.warning);
+          } catch (err) {
+            console.warn(`[approve] GSTIN extraction failed for ${po.id}:`, err);
+          }
+        }
+        if (docs.excel) attachments.push({ filename: docs.excel.filename, content: docs.excel.content });
+        if (docs.warnings.length) {
+          console.warn(`[approve] document fetch warnings for ${po.id}:`, docs.warnings);
+        }
+      } catch (err) {
+        console.warn(`[approve] getPoDocuments failed for ${po.id}:`, err);
+      }
+
       const tpl = warehouseInstructionEmail({
         channelName: po.channel.name,
         channelPoNumber: po.channelPoNumber ?? po.id,
         deliveryAddress: po.channel.billingAddress ?? "—",
         dispatchBy: formatDate(po.requestedDeliveryDate),
+        dispatchFrom,
         warehouseInstructionId: instruction.id,
         lines,
       });
@@ -97,6 +124,7 @@ export async function POST(req: NextRequest) {
           subject: tpl.subject,
           html: tpl.html,
           text: tpl.text,
+          attachments: attachments.length ? attachments : undefined,
         });
         await prisma.warehouseInstruction.update({
           where: { id: instruction.id },

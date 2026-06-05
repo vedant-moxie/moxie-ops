@@ -5,6 +5,9 @@ import { ok, handler } from "@/lib/api";
 import { currentActor } from "@/lib/auth";
 import { writeAudit } from "@/lib/services/audit";
 import { sendPoPreparationEmail } from "@/lib/integrations/po-test-email";
+import type { EmailAttachment } from "@/lib/integrations/po-test-email";
+import { getPoDocuments, extractGstinFromPdf } from "@/lib/services/po-documents";
+import { resolveDispatchFromGstins } from "@/lib/services/po-documents-helpers";
 
 export const dynamic = "force-dynamic";
 
@@ -89,10 +92,43 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
             ? extractRaw(po.rawData, FACILITY_KEYS)
             : extractRaw(firstLineRaw, FACILITY_KEYS);
 
-        const dispatchFrom =
+        // Fetch PDF + Excel once; derive dispatch-from from the PDF (avoids double download)
+        let dispatchFrom =
           extractRaw(po.rawData, DISPATCH_KEYS) !== "—"
             ? extractRaw(po.rawData, DISPATCH_KEYS)
             : extractRaw(firstLineRaw, DISPATCH_KEYS);
+        const attachments: EmailAttachment[] = [];
+        try {
+          const docs = await getPoDocuments(po);
+          if (docs.pdf) {
+            attachments.push({
+              filename: docs.pdf.filename,
+              content: docs.pdf.content,
+              contentType: "application/pdf",
+            });
+            // Resolve dispatch-from from the PDF GSTIN; overrides rawData if successful
+            try {
+              const gstins = await extractGstinFromPdf(docs.pdf.content);
+              const resolved = resolveDispatchFromGstins(gstins);
+              if (resolved.dispatchFrom) dispatchFrom = resolved.dispatchFrom;
+              if (resolved.warning) console.warn("[allocate] dispatchFrom:", resolved.warning);
+            } catch (err) {
+              console.warn("[allocate] GSTIN extraction failed:", err);
+            }
+          }
+          if (docs.excel) {
+            attachments.push({
+              filename: docs.excel.filename,
+              content: docs.excel.content,
+              contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            });
+          }
+          if (docs.warnings.length) {
+            console.warn("[allocate] document fetch warnings:", docs.warnings);
+          }
+        } catch (err) {
+          console.warn("[allocate] getPoDocuments failed:", err);
+        }
 
         const result = await sendPoPreparationEmail({
           poNumber: po.channelPoNumber ?? params.id,
@@ -105,6 +141,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
               sku: l.channelSkuCode ?? l.sku.internalCode,
               qty: allocMap[l.skuId] ?? l.approvedQty ?? 0,
             })),
+          attachments,
         });
         emailMessageId = result.messageId;
       }
