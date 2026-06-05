@@ -13,6 +13,36 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /**
+ * Build a POST body from an optional JSON template, substituting {since} {until}
+ * {page} {pageSize} {offset}. Numeric placeholders that stand alone become real
+ * numbers (e.g. "page":{page} → "page":0). Falls back to a sensible default shape
+ * when no template is configured.
+ */
+function renderBodyTemplate(
+  template: string | undefined,
+  vars: { since: string; until: string; page: number; pageSize: number; offset: number },
+): Record<string, unknown> {
+  if (!template) {
+    return {
+      filters: { startDate: vars.since, endDate: vars.until },
+      pagination: { offset: vars.offset, limit: vars.pageSize, page: vars.page, pageSize: vars.pageSize },
+    };
+  }
+  const filled = template
+    .replaceAll('"{page}"', String(vars.page))
+    .replaceAll('"{pageSize}"', String(vars.pageSize))
+    .replaceAll('"{offset}"', String(vars.offset))
+    .replaceAll("{since}", vars.since)
+    .replaceAll("{until}", vars.until)
+    .replaceAll("{page}", String(vars.page))
+    .replaceAll("{pageSize}", String(vars.pageSize))
+    .replaceAll("{offset}", String(vars.offset));
+  const parsed = JSON.parse(filled) as unknown;
+  if (!isRecord(parsed)) throw new InstamartAPIError("INSTAMART_PO_LIST_BODY must be a JSON object");
+  return parsed;
+}
+
+/**
  * Client for the Swiggy Instamart brand/seller portal data APIs. Authenticates
  * with the OTP access token as `Authorization: Bearer …` (the portal XHRs use
  * this). Mirrors BlinkitClient: a thin `req()` that flags expired auth so the
@@ -28,7 +58,7 @@ export class InstamartClient {
   constructor(private tokens: InstamartTokens) {}
 
   private headers(): Record<string, string> {
-    return {
+    const h: Record<string, string> = {
       accept: "application/json, text/plain, */*",
       "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
       app_version: env.INSTAMART_APP_VERSION,
@@ -41,6 +71,11 @@ export class InstamartClient {
       "x-client-request-id": randomUUID(),
       "x-timestamp": Date.now().toString(),
     };
+    // picker.swiggy.com authorizes off the portal SESSION cookie, not the ozone IDP
+    // Bearer token (it rejects Bearer with "Token missing"). When the captured cURL's
+    // Cookie header is supplied, send it so the data host accepts the request.
+    if (env.INSTAMART_PORTAL_COOKIE) h.cookie = env.INSTAMART_PORTAL_COOKIE;
+    return h;
   }
 
   private url(path: string): string {
@@ -77,8 +112,13 @@ export class InstamartClient {
 
   /**
    * Page the PO-listing endpoint and return raw PO summary objects for the window.
-   * Pagination uses offset/limit (the common Swiggy grid shape); adjust the params
-   * here once the captured cURL confirms the exact query keys.
+   *
+   * The endpoint (INSTAMART_PO_LIST_PATH) may be a FULL URL on a host different from
+   * the auth host — the PO search lives on picker.swiggy.com/api/v1/searchPurchaseOrder
+   * (POST), not partner.swiggy.com. Method is driven by INSTAMART_PO_LIST_METHOD and,
+   * for POST, the request body by the INSTAMART_PO_LIST_BODY template (placeholders
+   * {since}/{until}/{page}/{pageSize}/{offset}). When no template is given a sensible
+   * default body is sent. This makes the captured cURL a drop-in: paste path + body.
    */
   async listPurchaseOrders(opts: { since: string; until: string; pageSize?: number; maxPages?: number }): Promise<Record<string, unknown>[]> {
     const path = env.INSTAMART_PO_LIST_PATH;
@@ -86,20 +126,24 @@ export class InstamartClient {
       throw new InstamartEndpointUnknown(
         "INSTAMART_PO_LIST_PATH is not set. Capture the PO grid XHR from the logged-in " +
           "Swiggy Instamart Ads Portal (Network > Fetch/XHR > Copy as cURL) and set the path " +
-          "(+ any required query keys) so the client can page it.",
+          "(+ INSTAMART_PO_LIST_METHOD / INSTAMART_PO_LIST_BODY / INSTAMART_PORTAL_COOKIE) " +
+          "so the client can page it.",
       );
     }
     const pageSize = opts.pageSize ?? 50;
     const maxPages = opts.maxPages ?? 100;
+    const usePost = env.INSTAMART_PO_LIST_METHOD === "POST";
     const out: Record<string, unknown>[] = [];
     for (let page = 0; page < maxPages; page++) {
-      const payload = await this.getJson(path, {
-        // Common Swiggy grid params — refine against the real cURL when available.
-        offset: page * pageSize,
-        limit: pageSize,
-        start_date: opts.since,
-        end_date: opts.until,
-      });
+      const vars = { since: opts.since, until: opts.until, page, pageSize, offset: page * pageSize };
+      const payload = usePost
+        ? await this.postJson(path, renderBodyTemplate(env.INSTAMART_PO_LIST_BODY, vars))
+        : await this.getJson(path, {
+            offset: page * pageSize,
+            limit: pageSize,
+            start_date: opts.since,
+            end_date: opts.until,
+          });
       const batch = extractList(payload);
       out.push(...batch);
       if (batch.length < pageSize) break;

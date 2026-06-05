@@ -21,6 +21,33 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+/**
+ * Build the POST body for the PO-filter endpoint from an optional JSON template,
+ * substituting {since} {until} {page} {pageSize} {offset}. Quoted numeric
+ * placeholders (e.g. "page":"{page}") collapse to real numbers. Falls back to a
+ * default filter+pagination shape when no template is configured.
+ */
+function renderZeptoBody(
+  template: string | undefined,
+  vars: { since: string; until: string; page: number; pageSize: number; offset: number },
+): Record<string, unknown> {
+  if (!template) {
+    return { filters: { from: vars.since, to: vars.until }, page: vars.page, pageSize: vars.pageSize };
+  }
+  const filled = template
+    .replaceAll('"{page}"', String(vars.page))
+    .replaceAll('"{pageSize}"', String(vars.pageSize))
+    .replaceAll('"{offset}"', String(vars.offset))
+    .replaceAll("{since}", vars.since)
+    .replaceAll("{until}", vars.until)
+    .replaceAll("{page}", String(vars.page))
+    .replaceAll("{pageSize}", String(vars.pageSize))
+    .replaceAll("{offset}", String(vars.offset));
+  const parsed = JSON.parse(filled) as unknown;
+  if (!isRecord(parsed)) throw new ZeptoAPIError("ZEPTO_PO_LIST_BODY must be a JSON object");
+  return parsed;
+}
+
 /** Pull the first array of objects out of a paged/enveloped JSON response. */
 function extractRecords(payload: unknown, depth = 0): RawZeptoPo[] {
   if (depth > 6 || payload == null) return [];
@@ -69,7 +96,7 @@ export class ZeptoClient {
 
   private headers(): Record<string, string> {
     const tokenType = this.tokens.tokenType || "Bearer";
-    return {
+    const h: Record<string, string> = {
       accept: "application/json, text/plain, */*",
       "accept-language": "en-US,en;q=0.9,hi;q=0.8",
       "content-type": "application/json",
@@ -79,6 +106,10 @@ export class ZeptoClient {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
       authorization: `${tokenType} ${this.tokens.accessToken}`,
     };
+    // The data host (fcc.zepto.co.in) may authorize via session cookie in addition to
+    // the Bearer jwtToken — supply the captured cURL's Cookie header when needed.
+    if (env.ZEPTO_PORTAL_COOKIE) h.cookie = env.ZEPTO_PORTAL_COOKIE;
+    return h;
   }
 
   private async req(path: string, init: RequestInit): Promise<Response> {
@@ -117,7 +148,10 @@ export class ZeptoClient {
     }
     const pageSize = q.pageSize ?? 100;
     const all: RawZeptoPo[] = [];
-    const usesPost = /__POST__/.test(tpl);
+    // POST when ZEPTO_PO_LIST_METHOD=POST (fcc.zepto.co.in/api/v1/po/filter is POST) or
+    // the legacy __POST__ marker is embedded in the path. The path may be a full URL on
+    // a different host than the auth host — req() respects an absolute URL as-is.
+    const usesPost = env.ZEPTO_PO_LIST_METHOD === "POST" || /__POST__/.test(tpl);
     const basePath = tpl.replace("__POST__", "");
 
     for (let page = 0; page < 200; page++) {
@@ -129,11 +163,15 @@ export class ZeptoClient {
 
       let res: Response;
       if (usesPost) {
-        const body = {
-          filters: { from: q.since, to: q.until },
+        // Use the captured body template when provided (placeholders {since}/{until}/
+        // {page}/{pageSize}/{offset}); else a sensible default filter+pagination shape.
+        const body = renderZeptoBody(env.ZEPTO_PO_LIST_BODY, {
+          since: q.since,
+          until: q.until,
           page,
           pageSize,
-        };
+          offset: page * pageSize,
+        });
         res = await this.req(filled, { method: "POST", body: JSON.stringify(body) });
       } else {
         res = await this.req(filled, { method: "GET" });

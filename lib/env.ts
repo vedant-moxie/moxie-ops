@@ -80,9 +80,18 @@ const schema = z.object({
   ZEPTO_LOGIN_EMAIL: z.string().optional(), // Zepto portal account; OTP is sent for this user
   ZEPTO_PASSWORD: z.string().optional(), // Zepto portal password (sign-in body)
   ZEPTO_START_DATE: z.string().default("2026-06-01"), // backfill floor
-  // PO-listing endpoint discovered from the logged-in portal (path under ZEPTO_BASE_URL).
-  // Left configurable so it can be set once the grid XHR is captured, without a redeploy.
+  // PO-listing endpoint captured from the logged-in portal. May be a FULL URL on a
+  // different host than ZEPTO_BASE_URL (the data API lives on fcc.zepto.co.in, not the
+  // auth host cx.zepto.co.in) — e.g. "https://fcc.zepto.co.in/api/v1/po/filter".
   ZEPTO_PO_LIST_PATH: z.string().optional(),
+  // HTTP method for the PO-list endpoint. fcc.zepto.co.in/api/v1/po/filter is POST.
+  ZEPTO_PO_LIST_METHOD: z.enum(["GET", "POST"]).default("GET"),
+  // Optional POST body template (JSON). Placeholders {since} {until} {page} {pageSize}
+  // {offset} are substituted per request. Paste the exact body from the captured cURL.
+  ZEPTO_PO_LIST_BODY: z.string().optional(),
+  // Optional raw Cookie header when the data host authorizes via session cookie rather
+  // than (or in addition to) the Bearer jwtToken. Paste from the captured cURL.
+  ZEPTO_PORTAL_COOKIE: z.string().optional(),
   ZEPTO_PO_DETAIL_PATH: z.string().optional(), // optional per-PO line-items endpoint (use {poId})
   // Background auto-sync (runs while the app is up)
   ZEPTO_AUTO_SYNC: z.string().default("true"), // "false" to disable
@@ -106,8 +115,20 @@ const schema = z.object({
   INSTAMART_OTP_APP_PASSWORD: z.string().optional(),
   // Only ingest POs whose manufacturer/brand contains this (case-insensitive). Empty = no filter.
   INSTAMART_MANUFACTURER_FILTER: z.string().default(""),
-  // Optional path/query overrides for the PO grid endpoint once discovered from the portal cURL.
+  // PO grid endpoint captured from the logged-in portal. May be a FULL URL on a
+  // different host than INSTAMART_API_BASE_URL — the PO search lives on
+  // picker.swiggy.com, NOT partner.swiggy.com — e.g.
+  // "https://picker.swiggy.com/api/v1/searchPurchaseOrder".
   INSTAMART_PO_LIST_PATH: z.string().optional(),
+  // HTTP method for the PO-list endpoint. picker.swiggy.com/searchPurchaseOrder is POST.
+  INSTAMART_PO_LIST_METHOD: z.enum(["GET", "POST"]).default("GET"),
+  // Optional POST body template (JSON). Placeholders {since} {until} {page} {pageSize}
+  // {offset} are substituted per request. Paste the exact body from the captured cURL.
+  INSTAMART_PO_LIST_BODY: z.string().optional(),
+  // Optional raw Cookie header. picker.swiggy.com authorizes off the portal SESSION
+  // cookie (it rejects the ozone IDP Bearer token with "Token missing"), so the captured
+  // cURL's Cookie header is required to drive it. Paste it here.
+  INSTAMART_PORTAL_COOKIE: z.string().optional(),
   INSTAMART_PO_DETAIL_PATH: z.string().optional(),
   // Background auto-sync (runs while the app is up)
   INSTAMART_AUTO_SYNC: z.string().default("true"), // "false" to disable
