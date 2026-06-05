@@ -60,8 +60,11 @@ export async function waitForZeptoOtpImap(opts: {
     try {
       while (Date.now() < deadline) {
         // IMAP SINCE is date-granular; we refine with internalDate below.
+        // Search strictly for Zepto OTP emails. "Email Otp" is Zepto's exact subject.
+        // Do NOT use the generic { subject: "otp" } — it matches Instamart OTP emails
+        // ("Your Login OTP for Swiggy Instamart Ads Portal") and returns the wrong code.
         const uids = await client.search(
-          { since: new Date(floor), or: [{ from: "zeptonow" }, { subject: "Email Otp" }, { subject: "otp" }] },
+          { since: new Date(floor), or: [{ from: "zeptonow" }, { subject: "Email Otp" }] },
           { uid: true },
         );
         const candidates = Array.isArray(uids) ? uids.slice(-10).reverse() : [];
@@ -72,6 +75,8 @@ export async function waitForZeptoOtpImap(opts: {
           const parsed = await simpleParser(msg.source);
           const subject = parsed.subject ?? msg.envelope?.subject ?? "";
           const from = parsed.from?.text ?? "";
+          // Extra guard: skip Instamart OTP emails that leaked through.
+          if (subject.toLowerCase().includes("swiggy") || subject.toLowerCase().includes("instamart")) continue;
           const body = parsed.text ?? (typeof parsed.html === "string" ? parsed.html.replace(/<[^>]+>/g, " ") : "");
           const code = extractCode(subject, body);
           const allDigits = [...`${subject}\n${body}`.matchAll(/\b\d{4,8}\b/g)].map((m) => m[0]);

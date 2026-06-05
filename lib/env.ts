@@ -124,8 +124,8 @@ const schema = z.object({
   INSTAMART_ACCOUNT_ID: z.string().default("75a429de-dc67-44d2-b41d-608ce5e8a7f1"),
   // Internal SHA-1 hash used as brand_company_id in the searchPurchaseOrder body.
   // This is NOT the ozone-idp UUID — it's Swiggy's internal identifier for the brand.
-  // Captured from the live browser request (filters.brand_company_id field).
-  INSTAMART_BRAND_COMPANY_ID: z.string().default(""),
+  // Captured live from picker.swiggy.com (Moxie Beauty / Beyoutiful brand hash).
+  INSTAMART_BRAND_COMPANY_ID: z.string().default("ad98bf0ad58476b2549a49c0e375d554e2dc1fac"),
   // PO grid endpoint. Defaults to the confirmed working host/path (abacus-token auth, POST).
   INSTAMART_PO_LIST_PATH: z.string().default("https://picker.swiggy.com/api/v1/searchPurchaseOrder"),
   // HTTP method for the PO-list endpoint. picker.swiggy.com/searchPurchaseOrder is POST.
