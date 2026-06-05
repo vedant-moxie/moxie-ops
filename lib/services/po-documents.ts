@@ -1,8 +1,8 @@
 import "server-only";
 import { PDFParse } from "pdf-parse";
 import type { PurchaseOrder } from "@prisma/client";
-import { BlinkitClient, BlinkitAuthExpired } from "@/lib/integrations/blinkit/client.js";
-import { getTokens } from "@/lib/integrations/blinkit/auth.js";
+import { BlinkitClient, BlinkitAuthExpired } from "@/lib/integrations/blinkit/client";
+import { getTokens } from "@/lib/integrations/blinkit/auth";
 import {
   GSTIN_DISPATCH_TABLE,
   extractPoId,
@@ -10,7 +10,7 @@ import {
   resolveDispatchFrom,
   resolveDispatchFromGstins,
   type DispatchFromResult,
-} from "@/lib/services/po-documents-helpers.js";
+} from "@/lib/services/po-documents-helpers";
 
 // Re-export so callers only need to import from this module
 export {
