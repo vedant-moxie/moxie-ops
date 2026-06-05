@@ -91,6 +91,28 @@ const schema = z.object({
   ZEPTO_OTP_EMAIL: z.string().optional(), // defaults to ZEPTO_LOGIN_EMAIL
   ZEPTO_OTP_APP_PASSWORD: z.string().optional(),
 
+  // ── Swiggy Instamart Ads Portal live scraping (mirrors the Blinkit block) ──
+  // OTP-only login: a verification code is emailed to INSTAMART_LOGIN_EMAIL, which
+  // MUST be the monitored inbox so the IMAP reader can pick it up.
+  INSTAMART_BASE_URL: z.string().default("https://ozone-idp-brands-im-kba.swiggy.com/v1/accounts"),
+  // Swiggy brand/seller portal host the PO grid + line-item APIs live behind (Bearer auth).
+  INSTAMART_API_BASE_URL: z.string().default("https://partner.swiggy.com"),
+  INSTAMART_CLIENT_ID: z.string().default("f4e72b9a-5fde-4d1a-9e74-0237bcf4d67f"),
+  INSTAMART_APP_VERSION: z.string().default("1.4.67"),
+  INSTAMART_LOGIN_EMAIL: z.string().optional(), // OTP arrives here; must equal the monitored inbox
+  INSTAMART_START_DATE: z.string().default("2026-06-01"), // backfill floor
+  // OTP inbox over IMAP (Gmail app password). Falls back to BLINKIT_OTP_* / OTP_IMAP_HOST.
+  INSTAMART_OTP_EMAIL: z.string().optional(), // defaults to INSTAMART_LOGIN_EMAIL
+  INSTAMART_OTP_APP_PASSWORD: z.string().optional(),
+  // Only ingest POs whose manufacturer/brand contains this (case-insensitive). Empty = no filter.
+  INSTAMART_MANUFACTURER_FILTER: z.string().default(""),
+  // Optional path/query overrides for the PO grid endpoint once discovered from the portal cURL.
+  INSTAMART_PO_LIST_PATH: z.string().optional(),
+  INSTAMART_PO_DETAIL_PATH: z.string().optional(),
+  // Background auto-sync (runs while the app is up)
+  INSTAMART_AUTO_SYNC: z.string().default("true"), // "false" to disable
+  INSTAMART_SYNC_INTERVAL_HOURS: z.coerce.number().positive().default(3),
+
   // Company
   COMPANY_NAME: z.string().default("Moxie Beauty Pvt Ltd"),
   COMPANY_GSTIN: z.string().default("29ABCDE1234F1Z5"),

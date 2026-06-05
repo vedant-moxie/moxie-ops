@@ -59,10 +59,13 @@ export function ChannelDashboard({
         headers: { "Content-Type": "application/json" },
         body: "{}",
       });
-      // Routes for channels not yet merged 404 (or return an HTML error page) —
-      // treat anything non-JSON / non-OK as "not wired up yet" rather than crashing.
+      // The API always replies with a JSON envelope ({ success, data | error }),
+      // including for handled failures (HTTP 500 with json.error). Surface that
+      // real, per-channel reason in the toast. Only a genuinely non-JSON reply
+      // (e.g. an HTML 404 for a route not present on this deploy) is treated as
+      // "not wired up yet".
       const contentType = res.headers.get("content-type") ?? "";
-      if (!res.ok || !contentType.includes("application/json")) {
+      if (!contentType.includes("application/json")) {
         throw new Error("__unavailable__");
       }
       const json = await res.json();

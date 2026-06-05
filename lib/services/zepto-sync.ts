@@ -7,6 +7,9 @@ import { ingestZeptoDump, type IngestSummary } from "@/lib/services/zepto-ingest
 
 const IST_OFFSET_MS = 5.5 * 3_600_000;
 
+/** Raised when sync is invoked before the PO-grid endpoint has been configured. */
+export class ZeptoSyncNotConfigured extends Error {}
+
 /** A date N days ago in IST as YYYY-MM-DD. */
 function istDaysAgo(n: number): string {
   return new Date(Date.now() + IST_OFFSET_MS - n * 86_400_000).toISOString().slice(0, 10);
@@ -85,6 +88,15 @@ function flattenPosToSheet(pos: RawZeptoPo[]): ParsedSheet {
 export async function syncZepto(opts: { since?: string; until?: string; actorLabel?: string } = {}): Promise<SyncResult> {
   const since = opts.since ?? istDaysAgo(30);
   const until = opts.until ?? istDaysAgo(-1);
+
+  // Fail fast (before spending an OTP login) if the PO-grid endpoint isn't wired
+  // up yet — the auth + pagination are ready; only the captured cURL is missing.
+  if (!env.ZEPTO_PO_LIST_PATH) {
+    throw new ZeptoSyncNotConfigured(
+      "Zepto PO endpoint not configured yet — paste the portal PO-grid cURL to enable sync " +
+        "(set ZEPTO_PO_LIST_PATH). Auth + pagination are ready.",
+    );
+  }
 
   const runOnce = async (forceRefresh: boolean): Promise<RawZeptoPo[]> => {
     const tokens = await getTokens(forceRefresh);

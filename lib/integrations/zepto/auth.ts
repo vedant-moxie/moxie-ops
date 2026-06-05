@@ -101,6 +101,30 @@ export async function login(): Promise<ZeptoTokens> {
   return tokens;
 }
 
+/**
+ * Detect the "access not approved" rejection (HTTP 400, code 1003) the Zepto
+ * partner portal returns for accounts that exist but haven't been granted
+ * application access yet, and surface a clear, actionable message.
+ */
+function detectAccessRejection(email: string, status: number, body: string): ZeptoAuthError | null {
+  let parsed: unknown = null;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    /* non-JSON body — fall back to substring sniffing below */
+  }
+  const code = isRecord(parsed) ? parsed.code ?? parsed.errorCode ?? parsed.statusCode : undefined;
+  const isCode1003 = String(code) === "1003";
+  const looksNotApproved = /not\s+(yet\s+)?approved/i.test(body);
+  if (status === 400 && (isCode1003 || looksNotApproved)) {
+    return new ZeptoAuthError(
+      `Zepto login rejected: account ${email} is not approved for this application (code 1003). ` +
+        `Approve it on the Zepto partner portal, then retry.`,
+    );
+  }
+  return null;
+}
+
 /** POST /api/v1/auth/sign-in?applicationId=… {email,password} → mfaId. */
 async function signIn(email: string, password: string): Promise<string> {
   const url = `${env.ZEPTO_BASE_URL}/api/v1/auth/sign-in?applicationId=${env.ZEPTO_APPLICATION_ID}`;
@@ -111,17 +135,19 @@ async function signIn(email: string, password: string): Promise<string> {
   });
   const text = await res.text();
   if (!res.ok) {
-    throw new ZeptoAuthError(`sign-in failed: HTTP ${res.status} ${text.slice(0, 200)}`);
+    const rejection = detectAccessRejection(email, res.status, text);
+    if (rejection) throw rejection;
+    throw new ZeptoAuthError(`Zepto sign-in failed (HTTP ${res.status}): ${text.slice(0, 200)}`);
   }
   let data: Record<string, unknown>;
   try {
     data = peel(JSON.parse(text));
   } catch {
-    throw new ZeptoAuthError(`sign-in returned non-JSON (HTTP ${res.status}): ${text.slice(0, 200)}`);
+    throw new ZeptoAuthError(`Zepto sign-in returned non-JSON (HTTP ${res.status}): ${text.slice(0, 200)}`);
   }
   const mfaId = str(data.mfaId);
   if (!mfaId) {
-    throw new ZeptoAuthError(`sign-in returned no mfaId: keys=${Object.keys(data).join(",")}`);
+    throw new ZeptoAuthError(`Zepto sign-in returned no mfaId: keys=${Object.keys(data).join(",")}`);
   }
   return mfaId;
 }
