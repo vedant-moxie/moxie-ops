@@ -221,112 +221,119 @@ export class ZeptoClient {
   /**
    * Download the PDF for a single Zepto PO.
    *
-   * Tries (in order):
-   *   1. ZEPTO_PO_DOC_PATH env var with {poId}/{fmt} substituted (override for when
-   *      the exact endpoint is captured from the brands.zepto.co.in portal).
-   *   2. GET /api/v1/po/{poId}/download?type=pdf  (most common Zepto pattern)
-   *   3. GET /api/v1/po/{poId}/pdf
+   * Probes (in order):
+   *   1. ZEPTO_PO_DOC_PATH env var (operator override from a browser-captured cURL).
+   *   2. GET /api/v1/po/{poId}/document  — most likely single-doc endpoint
+   *   3. GET /api/v1/po/{poId}/documents — plural variant
+   *   4. GET /api/v1/po/{poId}           — full PO detail (may embed a document URL)
    *
-   * Handles both direct binary responses and JSON envelopes with signed_url/download_url.
-   * Throws ZeptoAuthExpired on 401/403. Returns null (never throws) for format errors —
-   * callers should treat a rejection as "unavailable" and continue without this attachment.
+   * Each JSON response is scanned recursively for a presigned S3 URL
+   * (amazonaws.com + X-Amz-Expires). Once found, the S3 object is fetched
+   * with NO auth headers (presigned URLs are self-authenticating).
+   *
+   * Throws ZeptoAuthExpired on 401/403. Throws ZeptoAPIError when all probes
+   * fail; callers use Promise.allSettled so this never reaches the allocate
+   * hot path as an unhandled exception.
    */
   async downloadPoPdf(poId: string): Promise<{ content: Buffer; filename: string }> {
-    return this.downloadPoDocument(poId, "pdf");
-  }
-
-  /**
-   * Download the Excel for a single Zepto PO.
-   * Same endpoint probing as downloadPoPdf; substitutes type=excel.
-   */
-  async downloadPoExcel(poId: string): Promise<{ content: Buffer; filename: string }> {
-    return this.downloadPoDocument(poId, "excel");
-  }
-
-  private async downloadPoDocument(
-    poId: string,
-    fmt: "pdf" | "excel",
-  ): Promise<{ content: Buffer; filename: string }> {
     const timeout = AbortSignal.timeout(15_000);
+    const base = env.ZEPTO_BASE_URL;
 
-    // Build the list of candidate URLs to try in order.
     const candidates: string[] = [];
-
     if (env.ZEPTO_PO_DOC_PATH) {
-      // Operator-supplied override (set this from a browser-captured cURL).
       candidates.push(
         env.ZEPTO_PO_DOC_PATH
           .replaceAll("{poId}", encodeURIComponent(poId))
-          .replaceAll("{fmt}", fmt),
+          .replaceAll("{fmt}", "pdf"),
       );
     }
-
-    // Probed paths on fcc.zepto.co.in (most likely based on API structure).
-    const base = env.ZEPTO_BASE_URL; // https://fcc.zepto.co.in
     candidates.push(
-      `${base}/api/v1/po/${encodeURIComponent(poId)}/download?type=${fmt}`,
-      `${base}/api/v1/po/${encodeURIComponent(poId)}/${fmt}`,
-      `${base}/api/v1/po-document/${encodeURIComponent(poId)}?format=${fmt}`,
+      `${base}/api/v1/po/${encodeURIComponent(poId)}/document`,
+      `${base}/api/v1/po/${encodeURIComponent(poId)}/documents`,
+      `${base}/api/v1/po/${encodeURIComponent(poId)}`,
     );
 
-    let lastErr = "";
+    let lastStatus = "";
     for (const url of candidates) {
       let res: Response;
       try {
         res = await fetch(url, { method: "GET", headers: this.headers(), signal: timeout });
       } catch (err) {
-        lastErr = String(err);
+        lastStatus = String(err);
         continue;
       }
       if (res.status === 401 || res.status === 403) {
-        throw new ZeptoAuthExpired(`auth expired on Zepto PO doc ${poId} (HTTP ${res.status})`);
-      }
-      if (res.status === 404 || res.status === 400) {
-        lastErr = `HTTP ${res.status}`;
-        continue;
+        throw new ZeptoAuthExpired(`auth expired on Zepto PDF for PO ${poId} (HTTP ${res.status})`);
       }
       if (!res.ok) {
-        lastErr = `HTTP ${res.status} ${(await res.text()).slice(0, 200)}`;
+        lastStatus = `HTTP ${res.status} on ${url.replace(base, "")}`;
         continue;
       }
 
-      const contentType = res.headers.get("content-type") ?? "";
-      if (contentType.includes("application/json") || contentType.includes("text/plain")) {
-        // JSON envelope: extract signed_url / download_url
-        const body = await res.json().catch(() => ({})) as unknown;
-        const inner = peelZeptoEnvelope(body);
-        const downloadUrl = isRecord(inner)
-          ? (inner.signed_url ?? inner.download_url ?? inner.url ?? null)
-          : null;
-        if (typeof downloadUrl === "string" && downloadUrl) {
-          const s3 = await fetch(downloadUrl, { signal: AbortSignal.timeout(15_000) });
-          if (!s3.ok) throw new ZeptoAPIError(`Zepto PO ${fmt} S3 fetch failed: HTTP ${s3.status}`);
-          const content = Buffer.from(await s3.arrayBuffer());
-          const filename =
-            parseZeptoContentDisposition(s3.headers.get("content-disposition") ?? "") ??
-            new URL(downloadUrl).pathname.split("/").pop() ??
-            `${poId}.${fmt}`;
-          return { content, filename };
+      const ct = res.headers.get("content-type") ?? "";
+      if (ct.includes("application/pdf")) {
+        const content = Buffer.from(await res.arrayBuffer());
+        return { content, filename: `${poId}.pdf` };
+      }
+
+      // Scan the response text for a presigned S3 URL
+      const rawText = await res.text();
+      const presignedUrl = findZeptoS3PresignedUrl(rawText);
+      if (presignedUrl) {
+        const s3Res = await fetch(presignedUrl, { signal: AbortSignal.timeout(15_000) });
+        if (!s3Res.ok) {
+          throw new ZeptoAPIError(`Zepto PDF S3 fetch failed HTTP ${s3Res.status} for PO ${poId}`);
         }
-        // JSON body without a download URL — this endpoint exists but doesn't expose docs
-        lastErr = `JSON response without signed_url/download_url: ${JSON.stringify(inner).slice(0, 200)}`;
-        continue;
+        const content = Buffer.from(await s3Res.arrayBuffer());
+        const filename =
+          parseZeptoContentDisposition(s3Res.headers.get("content-disposition") ?? "") ??
+          zeptoUrlFilename(presignedUrl) ??
+          `${poId}.pdf`;
+        return { content, filename };
       }
-
-      // Direct binary response
-      const content = Buffer.from(await res.arrayBuffer());
-      const filename =
-        parseZeptoContentDisposition(res.headers.get("content-disposition") ?? "") ??
-        `${poId}.${fmt}`;
-      return { content, filename };
+      lastStatus = `no S3 URL in response from ${url.replace(base, "")}: ${rawText.slice(0, 120)}`;
     }
 
     throw new ZeptoAPIError(
-      `Zepto PO ${fmt} not available for PO ${poId}. ` +
-        `None of the probed endpoints returned a document (last: ${lastErr}). ` +
-        `To unlock: open brands.zepto.co.in → PO ${poId} → "Download PO" → Copy as cURL ` +
-        `and set ZEPTO_PO_DOC_PATH to the endpoint path.`,
+      `Zepto PDF not available for PO ${poId} (last: ${lastStatus}). ` +
+        `To unlock: open brands.zepto.co.in → PO ${poId} → "Download PO Document" → ` +
+        `DevTools Network → find the request immediately before the S3 GET ` +
+        `(https://prod-nexus-svc-bucket.s3…) → set ZEPTO_PO_DOC_PATH to that request's path.`,
     );
+  }
+
+  /**
+   * Build a CSV for a single Zepto PO from the line-items JSON endpoint.
+   *
+   * There is no server-side CSV/Excel for Zepto POs — the brands portal builds
+   * the spreadsheet client-side from the items endpoint. We replicate that here.
+   *
+   * Endpoint: GET /api/v1/po/{poId}/items?offset=0&limit=-1
+   * Auth:     authorization header (same raw HS256 JWT as all other Zepto calls)
+   *
+   * Returns filename {poId}.csv. Throws ZeptoAuthExpired on 401/403.
+   */
+  async downloadPoExcel(poId: string): Promise<{ content: Buffer; filename: string }> {
+    const timeout = AbortSignal.timeout(15_000);
+    const url = `${env.ZEPTO_BASE_URL}/api/v1/po/${encodeURIComponent(poId)}/items?offset=0&limit=-1`;
+
+    let res: Response;
+    try {
+      res = await fetch(url, { method: "GET", headers: this.headers(), signal: timeout });
+    } catch (err) {
+      throw new ZeptoAPIError(`Zepto items fetch failed for PO ${poId}: ${err}`);
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw new ZeptoAuthExpired(`auth expired fetching Zepto items for PO ${poId} (HTTP ${res.status})`);
+    }
+    if (!res.ok) {
+      throw new ZeptoAPIError(`Zepto items endpoint HTTP ${res.status} for PO ${poId}`);
+    }
+
+    const json = await res.json().catch(() => null) as unknown;
+    const items = extractZeptoItemsList(json);
+    const csv = buildZeptoCsv(poId, items);
+    return { content: Buffer.from(csv, "utf-8"), filename: `${poId}.csv` };
   }
 
   /**
@@ -348,11 +355,6 @@ export class ZeptoClient {
 
 // ── private helpers ────────────────────────────────────────────────────────────
 
-function peelZeptoEnvelope(payload: unknown): unknown {
-  if (isRecord(payload) && "data" in payload) return payload.data;
-  return payload;
-}
-
 const ZEPTO_CD_RE = /filename\*?=(?:"([^"]+)"|([^;]+))/i;
 function parseZeptoContentDisposition(header: string): string | null {
   if (!header) return null;
@@ -361,4 +363,151 @@ function parseZeptoContentDisposition(header: string): string | null {
   let raw = (m[1] || m[2] || "").trim();
   if (raw.toLowerCase().startsWith("utf-8''")) raw = decodeURIComponent(raw.slice(7));
   return raw || null;
+}
+
+function zeptoUrlFilename(url: string): string | null {
+  try {
+    const p = new URL(url).pathname;
+    const last = p.split("/").pop();
+    return last && last.includes(".") ? last : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Scan a raw JSON response text for a presigned S3 URL.
+ * First tries a regex sweep for the obvious amazonaws.com+X-Amz pattern,
+ * then falls back to recursively walking the parsed JSON looking for common
+ * URL field names or any string value that looks like a presigned URL.
+ */
+function findZeptoS3PresignedUrl(rawText: string): string | null {
+  // Fast path: regex match for presigned S3 URLs embedded anywhere in the text
+  const S3_RE = /https:\/\/[^\s"'<>]+amazonaws\.com[^\s"'<>]+X-Amz-Expires[^\s"'<>]*/;
+  const m = rawText.match(S3_RE);
+  if (m) return m[0]!;
+
+  // Slow path: parse JSON and walk the object graph
+  try {
+    return findPresignedUrlInJson(JSON.parse(rawText) as unknown, 0);
+  } catch {
+    return null;
+  }
+}
+
+const ZEPTO_URL_FIELD_KEYS = [
+  "document_url", "documentUrl", "pdf_url", "pdfUrl",
+  "download_url", "downloadUrl", "signed_url", "signedUrl",
+  "presigned_url", "presignedUrl", "url",
+];
+
+function findPresignedUrlInJson(val: unknown, depth: number): string | null {
+  if (depth > 10 || val == null) return null;
+  if (typeof val === "string") {
+    if (val.includes("amazonaws.com") && val.includes("X-Amz")) return val;
+    return null;
+  }
+  if (Array.isArray(val)) {
+    for (const item of val.slice(0, 30)) {
+      const r = findPresignedUrlInJson(item, depth + 1);
+      if (r) return r;
+    }
+    return null;
+  }
+  if (typeof val === "object") {
+    const obj = val as Record<string, unknown>;
+    // Prioritise well-known URL field names
+    for (const key of ZEPTO_URL_FIELD_KEYS) {
+      const v = obj[key];
+      if (typeof v === "string" && v.startsWith("https://")) return v;
+    }
+    // Then recurse into all values
+    for (const v of Object.values(obj)) {
+      const r = findPresignedUrlInJson(v, depth + 1);
+      if (r) return r;
+    }
+  }
+  return null;
+}
+
+// ── CSV generation from items endpoint ─────────────────────────────────────────
+
+const ZEPTO_CSV_COL_MAP: Array<{ keys: string[]; header: string }> = [
+  { keys: ["sku_code", "skuCode", "product_code", "productCode", "item_code", "itemCode", "vendor_sku_code", "vendorSkuCode", "barcode"], header: "SKU Code" },
+  { keys: ["ean_no", "eanNo", "ean", "barcode", "upc"], header: "EAN" },
+  // skuName is the Zepto-native product-name field
+  { keys: ["skuName", "sku_name", "product_name", "productName", "item_name", "itemName", "name", "description", "product_description"], header: "Product Name" },
+  { keys: ["brand", "brand_name", "brandName"], header: "Brand" },
+  { keys: ["category", "category_name", "categoryName", "category_display_name", "categoryDisplayName"], header: "Category" },
+  // poQty is the Zepto-native ordered-quantity field
+  { keys: ["poQty", "po_qty", "ordered_qty", "orderedQty", "quantity", "qty", "order_quantity", "orderQuantity", "requested_qty", "requestedQty"], header: "Ordered Qty" },
+  { keys: ["mrp", "max_retail_price", "maxRetailPrice"], header: "MRP" },
+  { keys: ["unitPrice", "unit_price", "selling_price", "sellingPrice", "price"], header: "Price" },
+  { keys: ["totalValue", "total_value", "total_amount", "totalAmount"], header: "Total Value" },
+  { keys: ["hsn_code", "hsnCode", "hsn"], header: "HSN Code" },
+  { keys: ["uom", "unit_of_measure", "unitOfMeasure", "unit"], header: "UOM" },
+  { keys: ["vendor_code", "vendorCode", "supplier_code", "supplierCode"], header: "Vendor Code" },
+];
+
+function extractZeptoItemsList(payload: unknown): Record<string, unknown>[] {
+  if (Array.isArray(payload)) return payload.filter(isRecord);
+  if (!isRecord(payload)) return [];
+  const inner = isRecord(payload.data) ? payload.data : payload;
+  if (Array.isArray(inner)) return inner.filter(isRecord);
+  if (isRecord(inner)) {
+    for (const k of ["items", "poItems", "po_items", "lineItems", "line_items", "records", "results", "list", "data"]) {
+      if (Array.isArray(inner[k])) return (inner[k] as unknown[]).filter(isRecord);
+    }
+    // Fallback: first array-valued field
+    for (const v of Object.values(inner)) {
+      if (Array.isArray(v)) return (v as unknown[]).filter(isRecord);
+    }
+  }
+  return [];
+}
+
+function buildZeptoCsv(poNumber: string, items: Record<string, unknown>[]): string {
+  if (items.length === 0) {
+    return `PO Number,Note\n${csvCell(poNumber)},No items returned by items endpoint\n`;
+  }
+
+  const firstItem = items[0]!;
+  const itemKeys = Object.keys(firstItem);
+  const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  // Find which preferred columns exist in the response
+  const activeCols: Array<{ key: string; header: string }> = [];
+  for (const colSpec of ZEPTO_CSV_COL_MAP) {
+    for (const specKey of colSpec.keys) {
+      const actualKey = itemKeys.find(k => normalize(k) === normalize(specKey));
+      if (actualKey) {
+        activeCols.push({ key: actualKey, header: colSpec.header });
+        break;
+      }
+    }
+  }
+
+  // If none matched, output all primitive-valued fields
+  if (activeCols.length === 0) {
+    for (const key of itemKeys) {
+      const v = firstItem[key];
+      if (v == null || typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+        activeCols.push({ key, header: key });
+      }
+    }
+  }
+
+  const headerRow = ["PO Number", ...activeCols.map(c => c.header)].map(csvCell).join(",");
+  const dataRows = items.map(item =>
+    [poNumber, ...activeCols.map(c => item[c.key])].map(csvCell).join(","),
+  );
+  return [headerRow, ...dataRows, ""].join("\n");
+}
+
+function csvCell(value: unknown): string {
+  const s = value == null ? "" : String(value);
+  if (s.includes(",") || s.includes('"') || s.includes("\n") || s.includes("\r")) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
 }
