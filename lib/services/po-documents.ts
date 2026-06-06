@@ -1,5 +1,5 @@
 import "server-only";
-import { PDFParse } from "pdf-parse";
+import { getDocumentProxy, extractText } from "unpdf";
 import type { PurchaseOrder } from "@prisma/client";
 import { BlinkitClient, BlinkitAuthExpired } from "@/lib/integrations/blinkit/client";
 import { getTokens } from "@/lib/integrations/blinkit/auth";
@@ -25,9 +25,9 @@ export {
 
 /** Extract all GSTINs from a PDF buffer. Returns unique matches, deduped. */
 export async function extractGstinFromPdf(pdfBuffer: Buffer): Promise<string[]> {
-  const parser = new PDFParse({ data: new Uint8Array(pdfBuffer) });
-  const result = await parser.getText();
-  return findGstinsInText(result.text);
+  const pdf = await getDocumentProxy(new Uint8Array(pdfBuffer));
+  const { text } = await extractText(pdf, { mergePages: true });
+  return findGstinsInText(text);
 }
 
 // ── PO document bundle ──────────────────────────────────────────────────────
