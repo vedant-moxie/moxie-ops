@@ -213,6 +213,112 @@ export class InstamartClient {
     return out;
   }
 
+  /**
+   * Download the PDF for a single Instamart PO.
+   *
+   * Tries (in order):
+   *   1. INSTAMART_PO_DOC_PATH env var with {poId}/{fmt} substituted (override).
+   *   2. GET picker.swiggy.com/api/v1/purchaseOrderDocument/{poId}/download?format=pdf
+   *   3. GET picker.swiggy.com/api/v1/purchaseOrder/{poId}/pdf
+   *   4. GET partner.instamart.in/api/v1/purchaseOrder/{poId}/pdf
+   *
+   * Handles direct binary and JSON envelope (signed_url/download_url).
+   * Throws InstamartAuthExpired on 401/403.
+   */
+  async downloadPoPdf(poId: string): Promise<{ content: Buffer; filename: string }> {
+    return this.downloadPoDocument(poId, "pdf");
+  }
+
+  /**
+   * Download the Excel for a single Instamart PO.
+   * Same endpoint probing as downloadPoPdf; substitutes format=excel.
+   */
+  async downloadPoExcel(poId: string): Promise<{ content: Buffer; filename: string }> {
+    return this.downloadPoDocument(poId, "excel");
+  }
+
+  private async downloadPoDocument(
+    poId: string,
+    fmt: "pdf" | "excel",
+  ): Promise<{ content: Buffer; filename: string }> {
+    const timeout = AbortSignal.timeout(15_000);
+
+    const candidates: string[] = [];
+
+    if (env.INSTAMART_PO_DOC_PATH) {
+      candidates.push(
+        env.INSTAMART_PO_DOC_PATH
+          .replaceAll("{poId}", encodeURIComponent(poId))
+          .replaceAll("{fmt}", fmt),
+      );
+    }
+
+    // Probed paths on picker.swiggy.com and partner.instamart.in.
+    const pickerBase = "https://picker.swiggy.com";
+    candidates.push(
+      `${pickerBase}/api/v1/purchaseOrderDocument/${encodeURIComponent(poId)}/download?format=${fmt}`,
+      `${pickerBase}/api/v1/purchaseOrder/${encodeURIComponent(poId)}/${fmt}`,
+      `https://partner.instamart.in/api/v1/purchaseOrder/${encodeURIComponent(poId)}/${fmt}`,
+    );
+
+    let lastErr = "";
+    for (const url of candidates) {
+      let res: Response;
+      try {
+        res = await fetch(url, { method: "GET", headers: this.headers(), signal: timeout });
+      } catch (err) {
+        lastErr = String(err);
+        continue;
+      }
+      if (res.status === 401 || res.status === 403) {
+        throw new InstamartAuthExpired(`auth expired on Instamart PO doc ${poId} (HTTP ${res.status})`);
+      }
+      if (res.status === 404 || res.status === 400) {
+        lastErr = `HTTP ${res.status}`;
+        continue;
+      }
+      if (!res.ok) {
+        lastErr = `HTTP ${res.status} ${(await res.text()).slice(0, 200)}`;
+        continue;
+      }
+
+      const contentType = res.headers.get("content-type") ?? "";
+      if (contentType.includes("application/json") || contentType.includes("text/plain")) {
+        const body = await res.json().catch(() => ({})) as unknown;
+        const inner = peelInstamartEnvelope(body);
+        const downloadUrl = isRecord(inner)
+          ? (inner.signed_url ?? inner.download_url ?? inner.url ?? null)
+          : null;
+        if (typeof downloadUrl === "string" && downloadUrl) {
+          const s3 = await fetch(downloadUrl, { signal: AbortSignal.timeout(15_000) });
+          if (!s3.ok) throw new InstamartAPIError(`Instamart PO ${fmt} S3 fetch failed: HTTP ${s3.status}`);
+          const content = Buffer.from(await s3.arrayBuffer());
+          const filename =
+            parseInstamartContentDisposition(s3.headers.get("content-disposition") ?? "") ??
+            new URL(downloadUrl).pathname.split("/").pop() ??
+            `${poId}.${fmt}`;
+          return { content, filename };
+        }
+        lastErr = `JSON response without signed_url/download_url: ${JSON.stringify(inner).slice(0, 200)}`;
+        continue;
+      }
+
+      // Direct binary response
+      const content = Buffer.from(await res.arrayBuffer());
+      const filename =
+        parseInstamartContentDisposition(res.headers.get("content-disposition") ?? "") ??
+        `${poId}.${fmt}`;
+      return { content, filename };
+    }
+
+    throw new InstamartAPIError(
+      `Instamart PO ${fmt} not available for PO ${poId}. ` +
+        `None of the probed endpoints returned a document (last: ${lastErr}). ` +
+        `To unlock: open partner.instamart.in → PO ${poId} → "Download PO" → Copy as cURL ` +
+        `and set INSTAMART_PO_DOC_PATH to the endpoint path.`,
+    );
+  }
+
   /** Fetch the per-PO line items. Scaffold: wire the captured detail path/shape. */
   async getPurchaseOrderDetail(poNo: string): Promise<Record<string, unknown>[]> {
     const path = env.INSTAMART_PO_DETAIL_PATH;
@@ -226,6 +332,23 @@ export class InstamartClient {
     const payload = await this.getJson(resolved);
     return extractList(payload);
   }
+}
+
+// ── private helpers ────────────────────────────────────────────────────────────
+
+function peelInstamartEnvelope(payload: unknown): unknown {
+  if (isRecord(payload) && "data" in payload) return payload.data;
+  return payload;
+}
+
+const INSTAMART_CD_RE = /filename\*?=(?:"([^"]+)"|([^;]+))/i;
+function parseInstamartContentDisposition(header: string): string | null {
+  if (!header) return null;
+  const m = header.match(INSTAMART_CD_RE);
+  if (!m) return null;
+  let raw = (m[1] || m[2] || "").trim();
+  if (raw.toLowerCase().startsWith("utf-8''")) raw = decodeURIComponent(raw.slice(7));
+  return raw || null;
 }
 
 /**

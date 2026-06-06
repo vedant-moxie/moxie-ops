@@ -97,6 +97,15 @@ export async function getTokens(forceRefresh = false): Promise<ZeptoTokens> {
   return login();
 }
 
+/**
+ * Return cached tokens only — never trigger an OTP login.
+ * Use this for non-interactive background operations (e.g. doc downloads during allocate)
+ * where a slow OTP flow would block the HTTP response.
+ */
+export async function getTokensIfCached(): Promise<ZeptoTokens | null> {
+  return loadCached();
+}
+
 /** Full MFA login (brands.zepto.co.in): email+password → OTP → jwtToken → persist. */
 export async function login(): Promise<ZeptoTokens> {
   requireEnv("zepto", ["ZEPTO_LOGIN_EMAIL", "ZEPTO_PASSWORD"]);

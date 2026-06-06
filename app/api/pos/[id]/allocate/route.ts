@@ -81,6 +81,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         select: {
           channelPoNumber: true,
           rawData: true,
+          source: true,
           channel: { select: { name: true } },
           lineItems: {
             select: {

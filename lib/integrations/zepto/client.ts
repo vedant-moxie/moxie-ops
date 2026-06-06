@@ -219,6 +219,117 @@ export class ZeptoClient {
   }
 
   /**
+   * Download the PDF for a single Zepto PO.
+   *
+   * Tries (in order):
+   *   1. ZEPTO_PO_DOC_PATH env var with {poId}/{fmt} substituted (override for when
+   *      the exact endpoint is captured from the brands.zepto.co.in portal).
+   *   2. GET /api/v1/po/{poId}/download?type=pdf  (most common Zepto pattern)
+   *   3. GET /api/v1/po/{poId}/pdf
+   *
+   * Handles both direct binary responses and JSON envelopes with signed_url/download_url.
+   * Throws ZeptoAuthExpired on 401/403. Returns null (never throws) for format errors —
+   * callers should treat a rejection as "unavailable" and continue without this attachment.
+   */
+  async downloadPoPdf(poId: string): Promise<{ content: Buffer; filename: string }> {
+    return this.downloadPoDocument(poId, "pdf");
+  }
+
+  /**
+   * Download the Excel for a single Zepto PO.
+   * Same endpoint probing as downloadPoPdf; substitutes type=excel.
+   */
+  async downloadPoExcel(poId: string): Promise<{ content: Buffer; filename: string }> {
+    return this.downloadPoDocument(poId, "excel");
+  }
+
+  private async downloadPoDocument(
+    poId: string,
+    fmt: "pdf" | "excel",
+  ): Promise<{ content: Buffer; filename: string }> {
+    const timeout = AbortSignal.timeout(15_000);
+
+    // Build the list of candidate URLs to try in order.
+    const candidates: string[] = [];
+
+    if (env.ZEPTO_PO_DOC_PATH) {
+      // Operator-supplied override (set this from a browser-captured cURL).
+      candidates.push(
+        env.ZEPTO_PO_DOC_PATH
+          .replaceAll("{poId}", encodeURIComponent(poId))
+          .replaceAll("{fmt}", fmt),
+      );
+    }
+
+    // Probed paths on fcc.zepto.co.in (most likely based on API structure).
+    const base = env.ZEPTO_BASE_URL; // https://fcc.zepto.co.in
+    candidates.push(
+      `${base}/api/v1/po/${encodeURIComponent(poId)}/download?type=${fmt}`,
+      `${base}/api/v1/po/${encodeURIComponent(poId)}/${fmt}`,
+      `${base}/api/v1/po-document/${encodeURIComponent(poId)}?format=${fmt}`,
+    );
+
+    let lastErr = "";
+    for (const url of candidates) {
+      let res: Response;
+      try {
+        res = await fetch(url, { method: "GET", headers: this.headers(), signal: timeout });
+      } catch (err) {
+        lastErr = String(err);
+        continue;
+      }
+      if (res.status === 401 || res.status === 403) {
+        throw new ZeptoAuthExpired(`auth expired on Zepto PO doc ${poId} (HTTP ${res.status})`);
+      }
+      if (res.status === 404 || res.status === 400) {
+        lastErr = `HTTP ${res.status}`;
+        continue;
+      }
+      if (!res.ok) {
+        lastErr = `HTTP ${res.status} ${(await res.text()).slice(0, 200)}`;
+        continue;
+      }
+
+      const contentType = res.headers.get("content-type") ?? "";
+      if (contentType.includes("application/json") || contentType.includes("text/plain")) {
+        // JSON envelope: extract signed_url / download_url
+        const body = await res.json().catch(() => ({})) as unknown;
+        const inner = peelZeptoEnvelope(body);
+        const downloadUrl = isRecord(inner)
+          ? (inner.signed_url ?? inner.download_url ?? inner.url ?? null)
+          : null;
+        if (typeof downloadUrl === "string" && downloadUrl) {
+          const s3 = await fetch(downloadUrl, { signal: AbortSignal.timeout(15_000) });
+          if (!s3.ok) throw new ZeptoAPIError(`Zepto PO ${fmt} S3 fetch failed: HTTP ${s3.status}`);
+          const content = Buffer.from(await s3.arrayBuffer());
+          const filename =
+            parseZeptoContentDisposition(s3.headers.get("content-disposition") ?? "") ??
+            new URL(downloadUrl).pathname.split("/").pop() ??
+            `${poId}.${fmt}`;
+          return { content, filename };
+        }
+        // JSON body without a download URL — this endpoint exists but doesn't expose docs
+        lastErr = `JSON response without signed_url/download_url: ${JSON.stringify(inner).slice(0, 200)}`;
+        continue;
+      }
+
+      // Direct binary response
+      const content = Buffer.from(await res.arrayBuffer());
+      const filename =
+        parseZeptoContentDisposition(res.headers.get("content-disposition") ?? "") ??
+        `${poId}.${fmt}`;
+      return { content, filename };
+    }
+
+    throw new ZeptoAPIError(
+      `Zepto PO ${fmt} not available for PO ${poId}. ` +
+        `None of the probed endpoints returned a document (last: ${lastErr}). ` +
+        `To unlock: open brands.zepto.co.in → PO ${poId} → "Download PO" → Copy as cURL ` +
+        `and set ZEPTO_PO_DOC_PATH to the endpoint path.`,
+    );
+  }
+
+  /**
    * Optionally fetch line items for a single PO when the grid only returns
    * headers. Path template uses {poId}. Returns raw line records.
    */
@@ -233,4 +344,21 @@ export class ZeptoClient {
     const json = (await res.json().catch(() => null)) as unknown;
     return extractRecords(json);
   }
+}
+
+// ── private helpers ────────────────────────────────────────────────────────────
+
+function peelZeptoEnvelope(payload: unknown): unknown {
+  if (isRecord(payload) && "data" in payload) return payload.data;
+  return payload;
+}
+
+const ZEPTO_CD_RE = /filename\*?=(?:"([^"]+)"|([^;]+))/i;
+function parseZeptoContentDisposition(header: string): string | null {
+  if (!header) return null;
+  const m = header.match(ZEPTO_CD_RE);
+  if (!m) return null;
+  let raw = (m[1] || m[2] || "").trim();
+  if (raw.toLowerCase().startsWith("utf-8''")) raw = decodeURIComponent(raw.slice(7));
+  return raw || null;
 }

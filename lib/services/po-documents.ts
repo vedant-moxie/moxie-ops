@@ -2,7 +2,11 @@ import "server-only";
 import { getDocumentProxy, extractText } from "unpdf";
 import type { PurchaseOrder } from "@prisma/client";
 import { BlinkitClient, BlinkitAuthExpired } from "@/lib/integrations/blinkit/client";
-import { getTokensIfCached } from "@/lib/integrations/blinkit/auth";
+import { getTokensIfCached as getBlinkitTokensIfCached } from "@/lib/integrations/blinkit/auth";
+import { ZeptoClient, ZeptoAuthExpired } from "@/lib/integrations/zepto/client";
+import { getTokensIfCached as getZeptoTokensIfCached } from "@/lib/integrations/zepto/auth";
+import { InstamartClient, InstamartAuthExpired } from "@/lib/integrations/instamart/client";
+import { getTokensIfCached as getInstamartTokensIfCached } from "@/lib/integrations/instamart/auth";
 import {
   GSTIN_DISPATCH_TABLE,
   extractPoId,
@@ -39,21 +43,34 @@ export interface PoDocumentResult {
 }
 
 /**
- * Download the PDF and Excel for a Blinkit PO.
+ * Download the PDF and Excel for a PO, dispatching to the correct channel client
+ * based on po.source ('BLINKIT' | 'ZEPTO' | 'INSTAMART' | anything else).
+ *
  * Gracefully degrades: if one format fails it is returned as null with a warning.
  * Never throws — auth failures and missing tokens are returned as warnings so the
  * allocate email always sends (possibly without attachments).
  *
  * Uses only the cached token; never triggers a new OTP login so this is safe to
  * call in the hot path of an HTTP request handler.
- *
- * The partnersbiz PO id is read from po.channelPoNumber (preferred) or
- * po.rawData.po_number (fallback) — both hold the same numeric id from the bulk report.
- * The PDF endpoint accepts this id directly and returns {"data":{"signed_url":"..."}}.
- * The Excel endpoint is not available via the PO number alone (returns HTML); Excel
- * will degrade to null with a warning until the list endpoint (ERR 1001) is unblocked.
  */
 export async function getPoDocuments(
+  po: Pick<PurchaseOrder, "channelPoNumber" | "rawData" | "source">,
+): Promise<PoDocumentResult> {
+  const source = po.source ?? "EMAIL";
+
+  if (source === "ZEPTO") {
+    return getZeptoPoDocuments(po);
+  }
+  if (source === "INSTAMART") {
+    return getInstamartPoDocuments(po);
+  }
+  // Default: Blinkit / EMAIL / PORTAL / MANUAL — all use the partnersbiz client.
+  return getBlinkitPoDocuments(po);
+}
+
+// ── Blinkit (original path, unchanged) ─────────────────────────────────────
+
+async function getBlinkitPoDocuments(
   po: Pick<PurchaseOrder, "channelPoNumber" | "rawData">,
 ): Promise<PoDocumentResult> {
   const poId = extractPoId(po);
@@ -65,8 +82,7 @@ export async function getPoDocuments(
     };
   }
 
-  // Use the cached token only — never block the allocate response for an OTP login.
-  const tokens = await getTokensIfCached();
+  const tokens = await getBlinkitTokensIfCached();
   if (!tokens) {
     return {
       pdf: null,
@@ -93,12 +109,121 @@ export async function getPoDocuments(
       ? excelResult.value
       : (warnings.push(`Excel download failed for PO ${poId}: ${excelResult.reason}`), null);
 
-  // Auth errors are non-fatal here — the email sends without attachments.
   const hasAuthErr = [pdfResult, excelResult].some(
     (r) => r.status === "rejected" && r.reason instanceof BlinkitAuthExpired,
   );
   if (hasAuthErr) {
     warnings.push("Blinkit token expired — PO docs skipped (re-login needed)");
+  }
+
+  return { pdf, excel, warnings };
+}
+
+// ── Zepto ──────────────────────────────────────────────────────────────────
+
+async function getZeptoPoDocuments(
+  po: Pick<PurchaseOrder, "channelPoNumber" | "rawData">,
+): Promise<PoDocumentResult> {
+  const poId = po.channelPoNumber?.trim() || null;
+  if (!poId) {
+    return {
+      pdf: null,
+      excel: null,
+      warnings: ["Cannot derive Zepto PO id — channelPoNumber is empty"],
+    };
+  }
+
+  const tokens = await getZeptoTokensIfCached();
+  if (!tokens) {
+    return {
+      pdf: null,
+      excel: null,
+      warnings: [
+        "No cached Zepto token — PO docs skipped (run a Zepto sync to re-authenticate). " +
+          `To get PDF/Excel: open brands.zepto.co.in → PO ${poId} → Download PO → Copy as cURL ` +
+          "and set ZEPTO_PO_DOC_PATH to the endpoint path.",
+      ],
+    };
+  }
+
+  const client = new ZeptoClient(tokens);
+  const warnings: string[] = [];
+
+  const [pdfResult, excelResult] = await Promise.allSettled([
+    client.downloadPoPdf(poId),
+    client.downloadPoExcel(poId),
+  ]);
+
+  const pdf =
+    pdfResult.status === "fulfilled"
+      ? pdfResult.value
+      : (warnings.push(`Zepto PDF download failed for PO ${poId}: ${pdfResult.reason}`), null);
+
+  const excel =
+    excelResult.status === "fulfilled"
+      ? excelResult.value
+      : (warnings.push(`Zepto Excel download failed for PO ${poId}: ${excelResult.reason}`), null);
+
+  const hasAuthErr = [pdfResult, excelResult].some(
+    (r) => r.status === "rejected" && r.reason instanceof ZeptoAuthExpired,
+  );
+  if (hasAuthErr) {
+    warnings.push("Zepto token expired — PO docs skipped (re-login needed)");
+  }
+
+  return { pdf, excel, warnings };
+}
+
+// ── Instamart ──────────────────────────────────────────────────────────────
+
+async function getInstamartPoDocuments(
+  po: Pick<PurchaseOrder, "channelPoNumber" | "rawData">,
+): Promise<PoDocumentResult> {
+  const poId = po.channelPoNumber?.trim() || null;
+  if (!poId) {
+    return {
+      pdf: null,
+      excel: null,
+      warnings: ["Cannot derive Instamart PO id — channelPoNumber is empty"],
+    };
+  }
+
+  const tokens = await getInstamartTokensIfCached();
+  if (!tokens) {
+    return {
+      pdf: null,
+      excel: null,
+      warnings: [
+        "No cached Instamart token — PO docs skipped (run an Instamart sync to re-authenticate). " +
+          `To get PDF/Excel: open partner.instamart.in → PO ${poId} → Download PO → Copy as cURL ` +
+          "and set INSTAMART_PO_DOC_PATH to the endpoint path.",
+      ],
+    };
+  }
+
+  const client = new InstamartClient(tokens);
+  const warnings: string[] = [];
+
+  const [pdfResult, excelResult] = await Promise.allSettled([
+    client.downloadPoPdf(poId),
+    client.downloadPoExcel(poId),
+  ]);
+
+  const pdf =
+    pdfResult.status === "fulfilled"
+      ? pdfResult.value
+      : (warnings.push(`Instamart PDF download failed for PO ${poId}: ${pdfResult.reason}`), null);
+
+  const excel =
+    excelResult.status === "fulfilled"
+      ? excelResult.value
+      : (warnings.push(`Instamart Excel download failed for PO ${poId}: ${excelResult.reason}`), null);
+
+  const hasAuthErr = [pdfResult, excelResult].some(
+    (r) => r.status === "rejected" && r.reason instanceof InstamartAuthExpired,
+  );
+  if (hasAuthErr) {
+    warnings.push("Instamart token expired — PO docs skipped (re-login needed)");
   }
 
   return { pdf, excel, warnings };
@@ -120,7 +245,7 @@ export interface ResolvedDispatch {
  * under `_resolvedDispatchFrom` so repeat calls in the same request are cheap.
  */
 export async function resolveDispatchFromForPo(
-  po: Pick<PurchaseOrder, "channelPoNumber" | "rawData">,
+  po: Pick<PurchaseOrder, "channelPoNumber" | "rawData" | "source">,
 ): Promise<ResolvedDispatch> {
   // In-memory cache hit
   if (
@@ -134,9 +259,9 @@ export async function resolveDispatchFromForPo(
   }
 
   const warnings: string[] = [];
-  const poId = extractPoId(po);
+  const poId = po.channelPoNumber?.trim() || extractPoId(po) || null;
   if (!poId) {
-    return { dispatchFrom: null, gstin: null, warnings: ["No numeric PO id on this order"] };
+    return { dispatchFrom: null, gstin: null, warnings: ["No PO id on this order"] };
   }
 
   let pdfContent: Buffer;

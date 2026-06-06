@@ -74,6 +74,15 @@ export async function getTokens(forceRefresh = false): Promise<InstamartTokens> 
   return login();
 }
 
+/**
+ * Return cached tokens only — never trigger an OTP login.
+ * Use this for non-interactive background operations (e.g. doc downloads during allocate)
+ * where a slow OTP flow would block the HTTP response.
+ */
+export async function getTokensIfCached(): Promise<InstamartTokens | null> {
+  return loadCached();
+}
+
 /** Full OTP login: send code → read it from the inbox over IMAP → verify → persist. */
 export async function login(): Promise<InstamartTokens> {
   requireEnv("instamart", ["INSTAMART_LOGIN_EMAIL"]);

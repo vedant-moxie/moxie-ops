@@ -21,6 +21,7 @@ export async function POST(_req: NextRequest) {
         id: true,
         channelPoNumber: true,
         rawData: true,
+        source: true,
         channel: { select: { name: true } },
         lineItems: {
           select: {
