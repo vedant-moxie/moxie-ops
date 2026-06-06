@@ -99,6 +99,15 @@ export async function getTokens(forceRefresh = false): Promise<BlinkitTokens> {
   return login();
 }
 
+/**
+ * Return cached tokens only — never trigger an OTP login.
+ * Use this for non-interactive background operations (e.g. doc downloads during allocate)
+ * where a slow OTP flow would block the HTTP response.
+ */
+export async function getTokensIfCached(): Promise<BlinkitTokens | null> {
+  return loadCached();
+}
+
 /** Full OTP login: send → read code from inbox → verify → persist. No API key required. */
 export async function login(): Promise<BlinkitTokens> {
   requireEnv("blinkit", ["BLINKIT_LOGIN_EMAIL"]);

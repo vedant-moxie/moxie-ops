@@ -157,17 +157,27 @@ export class BlinkitClient {
     fmt: "pdf" | "excel" | "xlsx",
   ): Promise<{ content: Buffer; filename: string }> {
     const path = `/v1/client-po-details/${poId}/${fmt}/`;
-    const res = await this.req(path, { method: "GET", headers: this.headers() });
+    const res = await this.req(path, { method: "GET", headers: this.headers(), signal: AbortSignal.timeout(15_000) });
     if (!res.ok) {
       throw new BlinkitAPIError(`PO ${fmt} ${poId} failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
     }
     const contentType = res.headers.get("content-type") ?? "";
-    // If the response is JSON it may be an envelope with a presigned URL (like downloadRequest).
+
+    // SPA catch-all: partnersbiz returns its React index.html (HTTP 200, text/html) when a
+    // path isn't a real API route.  Treat it as a missing endpoint, not a successful download.
+    if (contentType.includes("text/html")) {
+      throw new BlinkitAPIError(`PO ${fmt} ${poId}: endpoint returned HTML — path not a valid API route for this id`);
+    }
+
+    // JSON envelope: partnersbiz wraps presigned S3 URLs in {"status":1,"data":{"signed_url":"..."}}
+    // The key may be signed_url (confirmed live), download_url, or url.
     if (contentType.includes("application/json") || contentType.includes("text/plain")) {
       const inner = peelEnvelope(await res.json().catch(() => ({})));
-      const downloadUrl = isRecord(inner) ? inner.download_url ?? inner.url : null;
+      const downloadUrl = isRecord(inner)
+        ? (inner.download_url ?? inner.url ?? inner.signed_url ?? null)
+        : null;
       if (typeof downloadUrl === "string" && downloadUrl) {
-        const s3 = await fetch(downloadUrl);
+        const s3 = await fetch(downloadUrl, { signal: AbortSignal.timeout(15_000) });
         if (!s3.ok) throw new BlinkitAPIError(`PO ${fmt} ${poId} S3 fetch failed: HTTP ${s3.status}`);
         const content = Buffer.from(await s3.arrayBuffer());
         const filename =
@@ -176,7 +186,7 @@ export class BlinkitClient {
           `${poId}.${fmt === "xlsx" ? "xlsx" : fmt}`;
         return { content, filename };
       }
-      throw new BlinkitAPIError(`PO ${fmt} ${poId}: unexpected JSON response without download_url`);
+      throw new BlinkitAPIError(`PO ${fmt} ${poId}: unexpected JSON response without download_url/signed_url`);
     }
     // Direct binary response
     const content = Buffer.from(await res.arrayBuffer());

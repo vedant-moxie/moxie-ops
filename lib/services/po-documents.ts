@@ -2,7 +2,7 @@ import "server-only";
 import { getDocumentProxy, extractText } from "unpdf";
 import type { PurchaseOrder } from "@prisma/client";
 import { BlinkitClient, BlinkitAuthExpired } from "@/lib/integrations/blinkit/client";
-import { getTokens } from "@/lib/integrations/blinkit/auth";
+import { getTokensIfCached } from "@/lib/integrations/blinkit/auth";
 import {
   GSTIN_DISPATCH_TABLE,
   extractPoId,
@@ -41,10 +41,17 @@ export interface PoDocumentResult {
 /**
  * Download the PDF and Excel for a Blinkit PO.
  * Gracefully degrades: if one format fails it is returned as null with a warning.
- * Only throws if there is an auth error (BlinkitAuthExpired) or no resolvable PO id.
+ * Never throws — auth failures and missing tokens are returned as warnings so the
+ * allocate email always sends (possibly without attachments).
+ *
+ * Uses only the cached token; never triggers a new OTP login so this is safe to
+ * call in the hot path of an HTTP request handler.
  *
  * The partnersbiz PO id is read from po.channelPoNumber (preferred) or
  * po.rawData.po_number (fallback) — both hold the same numeric id from the bulk report.
+ * The PDF endpoint accepts this id directly and returns {"data":{"signed_url":"..."}}.
+ * The Excel endpoint is not available via the PO number alone (returns HTML); Excel
+ * will degrade to null with a warning until the list endpoint (ERR 1001) is unblocked.
  */
 export async function getPoDocuments(
   po: Pick<PurchaseOrder, "channelPoNumber" | "rawData">,
@@ -58,7 +65,16 @@ export async function getPoDocuments(
     };
   }
 
-  const tokens = await getTokens();
+  // Use the cached token only — never block the allocate response for an OTP login.
+  const tokens = await getTokensIfCached();
+  if (!tokens) {
+    return {
+      pdf: null,
+      excel: null,
+      warnings: ["No cached Blinkit token — PO docs skipped (run a sync to re-authenticate)"],
+    };
+  }
+
   const client = new BlinkitClient(tokens);
   const warnings: string[] = [];
 
@@ -77,11 +93,13 @@ export async function getPoDocuments(
       ? excelResult.value
       : (warnings.push(`Excel download failed for PO ${poId}: ${excelResult.reason}`), null);
 
-  // Surface auth errors so the caller knows to re-authenticate
-  const authErr = [pdfResult, excelResult].find(
+  // Auth errors are non-fatal here — the email sends without attachments.
+  const hasAuthErr = [pdfResult, excelResult].some(
     (r) => r.status === "rejected" && r.reason instanceof BlinkitAuthExpired,
   );
-  if (authErr && authErr.status === "rejected") throw authErr.reason;
+  if (hasAuthErr) {
+    warnings.push("Blinkit token expired — PO docs skipped (re-login needed)");
+  }
 
   return { pdf, excel, warnings };
 }
