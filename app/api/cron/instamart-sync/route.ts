@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
 import { syncInstamart } from "@/lib/services/instamart-sync";
 import { sendWhatsAppAlert } from "@/lib/integrations/twilio";
+import { keepChannelTokenWarm } from "@/lib/services/token-refresh";
+import { getTokensIfCached, getTokens } from "@/lib/integrations/instamart/auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -22,7 +24,14 @@ export async function GET(req: NextRequest) {
     });
     const ageMs = latest ? Date.now() - latest.updatedAt.getTime() : Infinity;
     if (ageMs < env.INSTAMART_SYNC_INTERVAL_HOURS * 3_600_000) {
-      return NextResponse.json({ success: true, data: { skipped: true, reason: "fresh" } });
+      // Data is fresh so we skip the pull, but keep the token warm if it's near
+      // expiry so doc downloads in the allocate hot path rarely hit the 401 path.
+      const token = await keepChannelTokenWarm({
+        channel: "instamart",
+        getCached: getTokensIfCached,
+        refresh: () => getTokens(true),
+      });
+      return NextResponse.json({ success: true, data: { skipped: true, reason: "fresh", token } });
     }
   }
 

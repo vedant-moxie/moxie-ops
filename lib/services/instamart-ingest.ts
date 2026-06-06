@@ -156,7 +156,7 @@ export async function ingestLiveInstamartPOs(
     }
 
     const externalId = `instamart:${poNo}`;
-    await prisma.$transaction(async (tx: typeof prisma) => {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const dbPo = await tx.purchaseOrder.upsert({
         where: { externalId },
         create: {
@@ -384,7 +384,7 @@ export async function ingestInstamartRows(
     const hasGrn = totalReceived > 0;
 
     const externalId = `instamart:${poNo}`;
-    await prisma.$transaction(async (tx: typeof prisma) => {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const po = await tx.purchaseOrder.upsert({
         where: { externalId },
         create: {
