@@ -86,6 +86,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
             select: {
               skuId: true,
               approvedQty: true,
+              requestedQty: true,
               channelSkuCode: true,
               rawData: true,
               sku: { select: { internalCode: true } },
@@ -151,13 +152,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           lines: po.lineItems
             .map((l) => {
               // allocMap wins; fall back to saved approvedQty; finally fall back to
-              // rawData.units_ordered so lines are never blank on first allocate
+              // requestedQty (always populated DB column) so lines are never blank
               const qty: number =
                 allocMap[l.skuId] != null
                   ? (allocMap[l.skuId] as number)
                   : (l.approvedQty ?? 0) > 0
                     ? l.approvedQty!
-                    : orderedQty(l.rawData);
+                    : l.requestedQty;
               return { sku: l.channelSkuCode ?? l.sku.internalCode, qty };
             })
             .filter((l) => l.qty > 0),
