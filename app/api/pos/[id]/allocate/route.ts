@@ -132,10 +132,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
             }
           }
           if (docs.excel) {
+            const isCsv = docs.excel.filename.toLowerCase().endsWith(".csv");
             attachments.push({
               filename: docs.excel.filename,
               content: docs.excel.content,
-              contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              contentType: isCsv
+                ? "text/csv"
+                : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             });
           }
           if (docs.warnings.length) {

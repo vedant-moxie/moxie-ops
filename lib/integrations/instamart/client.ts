@@ -214,24 +214,18 @@ export class InstamartClient {
   }
 
   /**
-   * Download the PDF for a single Instamart PO.
-   *
-   * Tries (in order):
-   *   1. INSTAMART_PO_DOC_PATH env var with {poId}/{fmt} substituted (override).
-   *   2. GET picker.swiggy.com/api/v1/purchaseOrderDocument/{poId}/download?format=pdf
-   *   3. GET picker.swiggy.com/api/v1/purchaseOrder/{poId}/pdf
-   *   4. GET partner.instamart.in/api/v1/purchaseOrder/{poId}/pdf
-   *
-   * Handles direct binary and JSON envelope (signed_url/download_url).
-   * Throws InstamartAuthExpired on 401/403.
+   * Download the PDF for a single Instamart PO via the confirmed batch/generate endpoint.
+   * Returns { content, filename } where filename ends in .pdf.
+   * Throws InstamartAuthExpired on 401/403; never throws into the allocate hot path
+   * (caller wraps in Promise.allSettled).
    */
   async downloadPoPdf(poId: string): Promise<{ content: Buffer; filename: string }> {
     return this.downloadPoDocument(poId, "pdf");
   }
 
   /**
-   * Download the Excel for a single Instamart PO.
-   * Same endpoint probing as downloadPoPdf; substitutes format=excel.
+   * Download the CSV for a single Instamart PO via the confirmed batch/generate endpoint.
+   * Instamart exposes CSV (MIME_TYPE_CSV), not xlsx — returns filename ending in .csv.
    */
   async downloadPoExcel(poId: string): Promise<{ content: Buffer; filename: string }> {
     return this.downloadPoDocument(poId, "excel");
@@ -241,82 +235,153 @@ export class InstamartClient {
     poId: string,
     fmt: "pdf" | "excel",
   ): Promise<{ content: Buffer; filename: string }> {
-    const timeout = AbortSignal.timeout(15_000);
+    const ext = fmt === "pdf" ? "pdf" : "csv";
 
-    const candidates: string[] = [];
-
+    // Env override: manually captured endpoint (set INSTAMART_PO_DOC_PATH from browser cURL)
     if (env.INSTAMART_PO_DOC_PATH) {
-      candidates.push(
-        env.INSTAMART_PO_DOC_PATH
-          .replaceAll("{poId}", encodeURIComponent(poId))
-          .replaceAll("{fmt}", fmt),
-      );
-    }
-
-    // Probed paths on picker.swiggy.com and partner.instamart.in.
-    const pickerBase = "https://picker.swiggy.com";
-    candidates.push(
-      `${pickerBase}/api/v1/purchaseOrderDocument/${encodeURIComponent(poId)}/download?format=${fmt}`,
-      `${pickerBase}/api/v1/purchaseOrder/${encodeURIComponent(poId)}/${fmt}`,
-      `https://partner.instamart.in/api/v1/purchaseOrder/${encodeURIComponent(poId)}/${fmt}`,
-    );
-
-    let lastErr = "";
-    for (const url of candidates) {
-      let res: Response;
-      try {
-        res = await fetch(url, { method: "GET", headers: this.headers(), signal: timeout });
-      } catch (err) {
-        lastErr = String(err);
-        continue;
-      }
+      const overrideUrl = env.INSTAMART_PO_DOC_PATH
+        .replaceAll("{poId}", encodeURIComponent(poId))
+        .replaceAll("{fmt}", fmt);
+      const res = await fetch(overrideUrl, {
+        method: "GET",
+        headers: this.headers(),
+        signal: AbortSignal.timeout(15_000),
+      });
       if (res.status === 401 || res.status === 403) {
         throw new InstamartAuthExpired(`auth expired on Instamart PO doc ${poId} (HTTP ${res.status})`);
       }
-      if (res.status === 404 || res.status === 400) {
-        lastErr = `HTTP ${res.status}`;
-        continue;
-      }
       if (!res.ok) {
-        lastErr = `HTTP ${res.status} ${(await res.text()).slice(0, 200)}`;
-        continue;
+        throw new InstamartAPIError(`INSTAMART_PO_DOC_PATH fetch failed: HTTP ${res.status} for PO ${poId}`);
       }
+      const ct = res.headers.get("content-type") ?? "";
+      if (ct.includes("application/json") || ct.includes("text/plain")) {
+        const envBody = await res.json().catch(() => ({})) as unknown;
+        const inner = peelInstamartEnvelope(envBody);
+        const dlUrl = isRecord(inner) ? extractStringField(inner, ["signed_url", "download_url", "url", "document_url"]) : null;
+        if (dlUrl) return this.fetchDocumentFromUrl(dlUrl, poId, ext);
+        throw new InstamartAPIError(`INSTAMART_PO_DOC_PATH JSON without URL for PO ${poId}: ${JSON.stringify(inner).slice(0, 200)}`);
+      }
+      const overrideContent = Buffer.from(await res.arrayBuffer());
+      const overrideFilename = parseInstamartContentDisposition(res.headers.get("content-disposition") ?? "") ?? `${poId}.${ext}`;
+      return { content: overrideContent, filename: overrideFilename };
+    }
 
-      const contentType = res.headers.get("content-type") ?? "";
-      if (contentType.includes("application/json") || contentType.includes("text/plain")) {
-        const body = await res.json().catch(() => ({})) as unknown;
-        const inner = peelInstamartEnvelope(body);
-        const downloadUrl = isRecord(inner)
-          ? (inner.signed_url ?? inner.download_url ?? inner.url ?? null)
-          : null;
-        if (typeof downloadUrl === "string" && downloadUrl) {
-          const s3 = await fetch(downloadUrl, { signal: AbortSignal.timeout(15_000) });
-          if (!s3.ok) throw new InstamartAPIError(`Instamart PO ${fmt} S3 fetch failed: HTTP ${s3.status}`);
-          const content = Buffer.from(await s3.arrayBuffer());
-          const filename =
-            parseInstamartContentDisposition(s3.headers.get("content-disposition") ?? "") ??
-            new URL(downloadUrl).pathname.split("/").pop() ??
-            `${poId}.${fmt}`;
-          return { content, filename };
+    // Primary: POST https://picker.swiggy.com/api/v1/document/batch/generate
+    // Auth: abacus-token header (same ozone-idp JWT as PO listing).
+    // MIME_TYPE_PDF → PDF attachment; MIME_TYPE_CSV → CSV attachment (Instamart's native export).
+    const mimeType = fmt === "pdf" ? "MIME_TYPE_PDF" : "MIME_TYPE_CSV";
+    const batchRes = await fetch("https://picker.swiggy.com/api/v1/document/batch/generate", {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({
+        document_entities: [{ entity_type: "ENTITY_TYPE_PURCHASE_ORDER", entity_id: poId }],
+        mime_type: mimeType,
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (batchRes.status === 401 || batchRes.status === 403) {
+      throw new InstamartAuthExpired(`auth expired on Instamart batch/generate for PO ${poId} (HTTP ${batchRes.status})`);
+    }
+    if (!batchRes.ok) {
+      const txt = (await batchRes.text()).slice(0, 300);
+      throw new InstamartAPIError(`Instamart batch/generate failed: HTTP ${batchRes.status} ${txt}`);
+    }
+
+    const batchBody = await batchRes.json() as unknown;
+    const data = peelInstamartEnvelope(batchBody);
+
+    if (isRecord(data)) {
+      // Sync path: direct URL in the response body
+      const directUrl = extractStringField(data, ["signed_url", "download_url", "url", "document_url"]);
+      if (directUrl) return this.fetchDocumentFromUrl(directUrl, poId, ext);
+
+      // Sync path: documents array containing URLs
+      for (const key of ["documents", "document_list", "items"]) {
+        const list = data[key];
+        if (Array.isArray(list) && list.length > 0 && isRecord(list[0])) {
+          const docUrl = extractStringField(list[0] as Record<string, unknown>, ["signed_url", "download_url", "url", "document_url"]);
+          if (docUrl) return this.fetchDocumentFromUrl(docUrl, poId, ext);
         }
-        lastErr = `JSON response without signed_url/download_url: ${JSON.stringify(inner).slice(0, 200)}`;
-        continue;
       }
 
-      // Direct binary response
-      const content = Buffer.from(await res.arrayBuffer());
-      const filename =
-        parseInstamartContentDisposition(res.headers.get("content-disposition") ?? "") ??
-        `${poId}.${fmt}`;
-      return { content, filename };
+      // Async path: batch_id / document_id returned — poll the status endpoint
+      const batchId = String(
+        data.batch_id ?? data.batchId ?? data.id ?? data.document_id ?? data.documentId ?? ""
+      );
+      if (batchId) return this.pollBatchDocument(batchId, poId, ext);
     }
 
     throw new InstamartAPIError(
-      `Instamart PO ${fmt} not available for PO ${poId}. ` +
-        `None of the probed endpoints returned a document (last: ${lastErr}). ` +
-        `To unlock: open partner.instamart.in → PO ${poId} → "Download PO" → Copy as cURL ` +
-        `and set INSTAMART_PO_DOC_PATH to the endpoint path.`,
+      `Instamart batch/generate returned unexpected response for PO ${poId}. ` +
+        `Raw: ${JSON.stringify(data).slice(0, 400)}. ` +
+        `If this response contains a batch_id or document_id key with a different name, ` +
+        `report the raw response so the polling key can be added.`
     );
+  }
+
+  private async pollBatchDocument(
+    batchId: string,
+    poId: string,
+    ext: string,
+  ): Promise<{ content: Buffer; filename: string }> {
+    const statusUrl = `https://picker.swiggy.com/api/v1/document/batch/${encodeURIComponent(batchId)}`;
+    const deadline = AbortSignal.timeout(13_000); // leave ~2s for the final download
+
+    for (let i = 0; i < 6; i++) {
+      await new Promise((r) => setTimeout(r, i === 0 ? 600 : 1_200));
+      let res: Response;
+      try {
+        res = await fetch(statusUrl, { method: "GET", headers: this.headers(), signal: deadline });
+      } catch {
+        continue;
+      }
+      if (res.status === 401 || res.status === 403) {
+        throw new InstamartAuthExpired(`auth expired polling Instamart batch ${batchId}`);
+      }
+      if (!res.ok) continue;
+
+      const poll = await res.json().catch(() => ({})) as unknown;
+      const data = peelInstamartEnvelope(poll);
+      if (!isRecord(data)) continue;
+
+      const status = String(data.status ?? "").toUpperCase();
+      if (status === "FAILED" || status === "ERROR") {
+        throw new InstamartAPIError(`Instamart batch ${batchId} generation failed: ${JSON.stringify(data).slice(0, 200)}`);
+      }
+
+      const pollUrl = extractStringField(data, ["signed_url", "download_url", "url", "document_url"]);
+      if (pollUrl) return this.fetchDocumentFromUrl(pollUrl, poId, ext);
+
+      for (const key of ["documents", "document_list", "items"]) {
+        const list = data[key];
+        if (Array.isArray(list) && list.length > 0 && isRecord(list[0])) {
+          const docUrl = extractStringField(list[0] as Record<string, unknown>, ["signed_url", "download_url", "url", "document_url"]);
+          if (docUrl) return this.fetchDocumentFromUrl(docUrl, poId, ext);
+        }
+      }
+    }
+
+    throw new InstamartAPIError(
+      `Instamart batch ${batchId} did not return a download URL within 15s for PO ${poId}`
+    );
+  }
+
+  private async fetchDocumentFromUrl(
+    url: string,
+    poId: string,
+    ext: string,
+  ): Promise<{ content: Buffer; filename: string }> {
+    const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) {
+      throw new InstamartAPIError(`Instamart doc fetch failed: HTTP ${res.status} for PO ${poId}`);
+    }
+    const content = Buffer.from(await res.arrayBuffer());
+    let filename = parseInstamartContentDisposition(res.headers.get("content-disposition") ?? "");
+    if (!filename) {
+      try { filename = new URL(url).pathname.split("/").pop() ?? ""; } catch { filename = ""; }
+    }
+    return { content, filename: filename || `${poId}.${ext}` };
   }
 
   /** Fetch the per-PO line items. Scaffold: wire the captured detail path/shape. */
@@ -339,6 +404,14 @@ export class InstamartClient {
 function peelInstamartEnvelope(payload: unknown): unknown {
   if (isRecord(payload) && "data" in payload) return payload.data;
   return payload;
+}
+
+function extractStringField(obj: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const v = obj[key];
+    if (typeof v === "string" && v) return v;
+  }
+  return null;
 }
 
 const INSTAMART_CD_RE = /filename\*?=(?:"([^"]+)"|([^;]+))/i;
