@@ -221,19 +221,26 @@ export class ZeptoClient {
   /**
    * Download the PDF for a single Zepto PO.
    *
-   * Probes (in order):
-   *   1. ZEPTO_PO_DOC_PATH env var (operator override from a browser-captured cURL).
-   *   2. GET /api/v1/po/{poId}/document  — most likely single-doc endpoint
-   *   3. GET /api/v1/po/{poId}/documents — plural variant
-   *   4. GET /api/v1/po/{poId}           — full PO detail (may embed a document URL)
+   * The PO PDF is a pre-generated file in S3 (prod-nexus-svc-bucket, object key =
+   * a document UUID). The brands portal lists it via the PO attachments endpoint,
+   * which returns a SHORT-LIVED presigned S3 URL (X-Amz-Expires=300):
    *
-   * Each JSON response is scanned recursively for a presigned S3 URL
-   * (amazonaws.com + X-Amz-Expires). Once found, the S3 object is fetched
-   * with NO auth headers (presigned URLs are self-authenticating).
+   *   GET /api/v1/po/{poNo}/attachments
+   *   → { data: [ { documentType: "PO_DOC", documentNumber, s3Url: "https://…amazonaws.com/…pdf?X-Amz-…" } ] }
    *
-   * Throws ZeptoAuthExpired on 401/403. Throws ZeptoAPIError when all probes
-   * fail; callers use Promise.allSettled so this never reaches the allocate
-   * hot path as an unhandled exception.
+   * We then fetch that presigned URL with NO auth headers (presigned URLs are
+   * self-authenticating) and return the PDF bytes.
+   *
+   * Probe order:
+   *   1. ZEPTO_PO_DOC_PATH env var (operator override; {poId} → PO no).
+   *   2. GET /api/v1/po/{poId}/attachments  — the live discovered endpoint.
+   *
+   * Each JSON response is parsed for an attachment s3Url, then scanned
+   * recursively for any presigned S3 URL as a fallback.
+   *
+   * Throws ZeptoAuthExpired on 401/403. Throws ZeptoAPIError when no document is
+   * found; callers use Promise.allSettled so this never reaches the allocate hot
+   * path as an unhandled exception.
    */
   async downloadPoPdf(poId: string): Promise<{ content: Buffer; filename: string }> {
     const timeout = AbortSignal.timeout(15_000);
@@ -247,11 +254,7 @@ export class ZeptoClient {
           .replaceAll("{fmt}", "pdf"),
       );
     }
-    candidates.push(
-      `${base}/api/v1/po/${encodeURIComponent(poId)}/document`,
-      `${base}/api/v1/po/${encodeURIComponent(poId)}/documents`,
-      `${base}/api/v1/po/${encodeURIComponent(poId)}`,
-    );
+    candidates.push(`${base}/api/v1/po/${encodeURIComponent(poId)}/attachments`);
 
     let lastStatus = "";
     for (const url of candidates) {
@@ -271,34 +274,34 @@ export class ZeptoClient {
       }
 
       const ct = res.headers.get("content-type") ?? "";
+      // Some override endpoints may stream the PDF directly.
       if (ct.includes("application/pdf")) {
         const content = Buffer.from(await res.arrayBuffer());
         return { content, filename: `${poId}.pdf` };
       }
 
-      // Scan the response text for a presigned S3 URL
+      // Parse the attachments envelope first (PO_DOC entry), then fall back to a
+      // recursive sweep for any presigned S3 URL embedded in the response.
       const rawText = await res.text();
-      const presignedUrl = findZeptoS3PresignedUrl(rawText);
+      const presignedUrl = extractZeptoAttachmentUrl(rawText) ?? findZeptoS3PresignedUrl(rawText);
       if (presignedUrl) {
+        // Presigned URLs are self-authenticating — send NO Zepto auth headers.
         const s3Res = await fetch(presignedUrl, { signal: AbortSignal.timeout(15_000) });
         if (!s3Res.ok) {
           throw new ZeptoAPIError(`Zepto PDF S3 fetch failed HTTP ${s3Res.status} for PO ${poId}`);
         }
         const content = Buffer.from(await s3Res.arrayBuffer());
-        const filename =
-          parseZeptoContentDisposition(s3Res.headers.get("content-disposition") ?? "") ??
-          zeptoUrlFilename(presignedUrl) ??
-          `${poId}.pdf`;
-        return { content, filename };
+        // S3 serves application/octet-stream with no content-disposition; force a
+        // .pdf filename so downstream attachers tag it application/pdf.
+        return { content, filename: `${poId}.pdf` };
       }
       lastStatus = `no S3 URL in response from ${url.replace(base, "")}: ${rawText.slice(0, 120)}`;
     }
 
     throw new ZeptoAPIError(
       `Zepto PDF not available for PO ${poId} (last: ${lastStatus}). ` +
-        `To unlock: open brands.zepto.co.in → PO ${poId} → "Download PO Document" → ` +
-        `DevTools Network → find the request immediately before the S3 GET ` +
-        `(https://prod-nexus-svc-bucket.s3…) → set ZEPTO_PO_DOC_PATH to that request's path.`,
+        `Expected GET /api/v1/po/${poId}/attachments to return data[].s3Url. ` +
+        `Set ZEPTO_PO_DOC_PATH to override the endpoint (use {poId} for the PO number).`,
     );
   }
 
@@ -355,24 +358,33 @@ export class ZeptoClient {
 
 // ── private helpers ────────────────────────────────────────────────────────────
 
-const ZEPTO_CD_RE = /filename\*?=(?:"([^"]+)"|([^;]+))/i;
-function parseZeptoContentDisposition(header: string): string | null {
-  if (!header) return null;
-  const m = header.match(ZEPTO_CD_RE);
-  if (!m) return null;
-  let raw = (m[1] || m[2] || "").trim();
-  if (raw.toLowerCase().startsWith("utf-8''")) raw = decodeURIComponent(raw.slice(7));
-  return raw || null;
-}
-
-function zeptoUrlFilename(url: string): string | null {
+/**
+ * Parse the Zepto PO attachments envelope and return the PO_DOC presigned S3 URL.
+ *
+ * Shape: { success, data: [ { documentType: "PO_DOC", documentNumber, s3Url } ] }
+ * Prefers the PO_DOC entry; falls back to the first attachment exposing an s3Url.
+ */
+function extractZeptoAttachmentUrl(rawText: string): string | null {
+  let parsed: unknown;
   try {
-    const p = new URL(url).pathname;
-    const last = p.split("/").pop();
-    return last && last.includes(".") ? last : null;
+    parsed = JSON.parse(rawText);
   } catch {
     return null;
   }
+  const data = isRecord(parsed) ? parsed.data : parsed;
+  const list = Array.isArray(data) ? data : isRecord(data) ? [data] : [];
+  const records = list.filter(isRecord);
+  const urlOf = (r: Record<string, unknown>): string | null => {
+    const v = r.s3Url ?? r.s3url ?? r.url ?? r.documentUrl ?? r.document_url;
+    return typeof v === "string" && v.startsWith("http") ? v : null;
+  };
+  const poDoc = records.find((r) => r.documentType === "PO_DOC" && urlOf(r));
+  if (poDoc) return urlOf(poDoc);
+  for (const r of records) {
+    const u = urlOf(r);
+    if (u) return u;
+  }
+  return null;
 }
 
 /**

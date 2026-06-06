@@ -98,8 +98,9 @@ const schema = z.object({
   // optional fallback in case the endpoint adds WAF enforcement later.
   ZEPTO_PORTAL_COOKIE: z.string().optional(),
   ZEPTO_PO_DETAIL_PATH: z.string().optional(), // optional per-PO line-items endpoint (use {poId})
-  // Per-PO document download base path. {poId} placeholder; {fmt} = pdf|excel.
-  // If unset, the client probes fcc.zepto.co.in/api/v1/po/{poId}/download?type={fmt}.
+  // Optional override for the PO PDF endpoint. {poId} placeholder; {fmt} = pdf|excel.
+  // If unset, the client uses GET /api/v1/po/{poId}/attachments, which returns
+  // data[].s3Url (a short-lived presigned prod-nexus-svc-bucket URL) for the PO_DOC.
   ZEPTO_PO_DOC_PATH: z.string().optional(),
   // Background auto-sync (runs while the app is up)
   ZEPTO_AUTO_SYNC: z.string().default("true"), // "false" to disable
