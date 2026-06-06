@@ -33,6 +33,19 @@ function extractRaw(obj: unknown, keys: string[]): string {
   return "—";
 }
 
+/** Fall back to the PO line item's original ordered qty when approvedQty is absent. */
+function orderedQty(rawData: unknown): number {
+  if (!rawData || typeof rawData !== "object") return 0;
+  const raw = rawData as Record<string, unknown>;
+  for (const key of ["units_ordered", "ordered_qty", "quantity", "order_qty"]) {
+    const v = raw[key];
+    if (v == null) continue;
+    const n = Number(v);
+    if (!Number.isNaN(n) && n > 0) return n;
+  }
+  return 0;
+}
+
 /** Persist per-SKU approved quantities for one PO and email abhishek@ about preparation. */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   return handler("POST /api/pos/[id]/allocate", async () => {
@@ -136,11 +149,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           location,
           dispatchFrom,
           lines: po.lineItems
-            .filter((l) => (allocMap[l.skuId] ?? l.approvedQty ?? 0) > 0)
-            .map((l) => ({
-              sku: l.channelSkuCode ?? l.sku.internalCode,
-              qty: allocMap[l.skuId] ?? l.approvedQty ?? 0,
-            })),
+            .map((l) => {
+              // allocMap wins; fall back to saved approvedQty; finally fall back to
+              // rawData.units_ordered so lines are never blank on first allocate
+              const qty: number =
+                allocMap[l.skuId] != null
+                  ? (allocMap[l.skuId] as number)
+                  : (l.approvedQty ?? 0) > 0
+                    ? l.approvedQty!
+                    : orderedQty(l.rawData);
+              return { sku: l.channelSkuCode ?? l.sku.internalCode, qty };
+            })
+            .filter((l) => l.qty > 0),
           attachments,
         });
         emailMessageId = result.messageId;

@@ -163,12 +163,6 @@ export class BlinkitClient {
     }
     const contentType = res.headers.get("content-type") ?? "";
 
-    // SPA catch-all: partnersbiz returns its React index.html (HTTP 200, text/html) when a
-    // path isn't a real API route.  Treat it as a missing endpoint, not a successful download.
-    if (contentType.includes("text/html")) {
-      throw new BlinkitAPIError(`PO ${fmt} ${poId}: endpoint returned HTML — path not a valid API route for this id`);
-    }
-
     // JSON envelope: partnersbiz wraps presigned S3 URLs in {"status":1,"data":{"signed_url":"..."}}
     // The key may be signed_url (confirmed live), download_url, or url.
     if (contentType.includes("application/json") || contentType.includes("text/plain")) {
