@@ -134,7 +134,7 @@ export async function ingestLiveZeptoPOs(
           (rawName ? "ZEP-" + rawName.toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 24).replace(/^-|-$/g, "") : "") ||
           `ZEP-${poNo.replace(/[^A-Z0-9]/gi, "").slice(0, 12)}-L${i}`;
         const name = rawName || code;
-        const qty = Math.max(0, Math.round(Number(line.quantity ?? line.qty ?? line.orderedQty ?? line.ordered_qty ?? 0) || 0));
+        const qty = Math.max(0, Math.round(Number(line.quantity ?? line.qty ?? line.orderedQty ?? line.ordered_qty ?? line.poQty ?? line.po_qty ?? 0) || 0));
         const unitPrice = Number(line.unitPrice ?? line.unit_price ?? line.price ?? null) || null;
         return { code, name, qty, unitPrice, rawData: line as Prisma.InputJsonValue };
       });

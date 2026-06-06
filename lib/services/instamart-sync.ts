@@ -42,24 +42,25 @@ export async function syncInstamart(opts: { since?: string; until?: string; acto
     const client = new InstamartClient(tokens);
     const summaries = await client.listPurchaseOrders({ since, until });
 
-    // If the per-PO detail endpoint is configured, hydrate line items per PO.
-    // picker.swiggy.com does not expose a working detail endpoint via abacus-token;
-    // this path is kept for when the user sets INSTAMART_PO_DETAIL_PATH via Playwright capture.
-    if (env.INSTAMART_PO_DETAIL_PATH) {
-      const hydrated: Record<string, unknown>[] = [];
-      for (const po of summaries) {
-        const poNo = pickPoNo(po);
-        if (!poNo) { hydrated.push(po); continue; }
-        try {
-          const lines = await client.getPurchaseOrderDetail(poNo);
+    // Hydrate each PO with per-SKU line items from listPurchaseOrderLines.
+    // Falls back gracefully to the summary line in ingest if the fetch fails.
+    const hydrated: Record<string, unknown>[] = [];
+    for (const po of summaries) {
+      const poNo = pickPoNo(po);
+      if (!poNo) { hydrated.push(po); continue; }
+      try {
+        const lines = await client.listPurchaseOrderLines(poNo);
+        if (lines.length) {
           hydrated.push({ ...po, line_items: lines });
-        } catch {
-          hydrated.push(po); // keep header even if detail fails
+        } else {
+          hydrated.push(po);
         }
+      } catch (err) {
+        console.warn(`[instamart-sync] lines fetch failed for PO ${poNo}: ${err instanceof Error ? err.message : err}`);
+        hydrated.push(po); // keep header if detail fails
       }
-      return hydrated;
     }
-    return summaries;
+    return hydrated;
   };
 
   let pos: Record<string, unknown>[];

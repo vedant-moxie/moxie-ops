@@ -53,18 +53,17 @@ export async function syncZepto(opts: { since?: string; until?: string; actorLab
     const client = new ZeptoClient(tokens);
     const pos = await client.listPurchaseOrders({ since, until });
 
-    // If the detail path is configured and a PO has no embedded line array, hydrate it.
-    if (env.ZEPTO_PO_DETAIL_PATH) {
-      for (const po of pos) {
-        if (findLineArray(po)) continue;
-        const poId = String(po.id ?? po.poId ?? po.poNumber ?? po.po_number ?? "");
-        if (!poId) continue;
-        try {
-          const lines = await client.fetchPoLineItems(poId);
-          if (lines.length) (po as Record<string, unknown>).lineItems = lines;
-        } catch {
-          // keep header if detail fails
-        }
+    // Hydrate each PO with per-SKU line items from the items endpoint.
+    // Falls back to the summary line in ingest if the fetch fails.
+    for (const po of pos) {
+      if (findLineArray(po)) continue;
+      const poId = String(po.id ?? po.poId ?? po.poNumber ?? po.po_number ?? "");
+      if (!poId) continue;
+      try {
+        const items = await client.fetchPoItems(poId);
+        if (items.length) (po as Record<string, unknown>).items = items;
+      } catch (err) {
+        console.warn(`[zepto-sync] items fetch failed for PO ${poId}: ${err instanceof Error ? err.message : err}`);
       }
     }
     return pos;

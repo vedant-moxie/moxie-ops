@@ -128,8 +128,10 @@ export async function ingestLiveInstamartPOs(
     const apiLines = extractLiveLines(po);
     if (apiLines && apiLines.length > 0) {
       lineSpecs = apiLines.map((line, i) => {
-        const rawCode = String(line.item_code ?? line.itemCode ?? line.sku_code ?? line.skuCode ?? line.product_code ?? line.productCode ?? "").trim();
-        const rawName = String(line.item_name ?? line.itemName ?? line.product_name ?? line.productName ?? "").trim();
+        // external_item_code is the native field from listPurchaseOrderLines;
+        // description is the native product name field from that endpoint.
+        const rawCode = String(line.external_item_code ?? line.item_code ?? line.itemCode ?? line.sku_code ?? line.skuCode ?? line.product_code ?? line.productCode ?? "").trim();
+        const rawName = String(line.description ?? line.item_name ?? line.itemName ?? line.product_name ?? line.productName ?? "").trim();
         const code = rawCode ||
           (rawName ? "IM-" + rawName.toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 24).replace(/^-|-$/g, "") : "") ||
           `IM-${poNo.replace(/[^A-Z0-9]/gi, "").slice(0, 12)}-L${i}`;

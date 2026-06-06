@@ -354,6 +354,33 @@ export class ZeptoClient {
     const json = (await res.json().catch(() => null)) as unknown;
     return extractRecords(json);
   }
+
+  /**
+   * Fetch per-SKU line items for a single PO from the Zepto items endpoint.
+   *
+   * Endpoint: GET /api/v1/po/{poId}/items?offset=0&limit=-1
+   * This is the same endpoint used to build the CSV attachment in downloadPoExcel.
+   * Returns the raw items array (skuCode, skuName, poQty, etc.) for ingest.
+   * Throws ZeptoAuthExpired on 401/403; throws ZeptoAPIError on other failures.
+   */
+  async fetchPoItems(poId: string): Promise<Record<string, unknown>[]> {
+    const timeout = AbortSignal.timeout(10_000);
+    const url = `${env.ZEPTO_BASE_URL}/api/v1/po/${encodeURIComponent(poId)}/items?offset=0&limit=-1`;
+    let res: Response;
+    try {
+      res = await fetch(url, { method: "GET", headers: this.headers(), signal: timeout });
+    } catch (err) {
+      throw new ZeptoAPIError(`Zepto items fetch failed for PO ${poId}: ${err}`);
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw new ZeptoAuthExpired(`auth expired fetching Zepto items for PO ${poId} (HTTP ${res.status})`);
+    }
+    if (!res.ok) {
+      throw new ZeptoAPIError(`Zepto items endpoint HTTP ${res.status} for PO ${poId}`);
+    }
+    const json = (await res.json().catch(() => null)) as unknown;
+    return extractZeptoItemsList(json);
+  }
 }
 
 // ── private helpers ────────────────────────────────────────────────────────────

@@ -359,6 +359,59 @@ export class InstamartClient {
     const payload = await this.getJson(resolved);
     return extractList(payload);
   }
+
+  /**
+   * Fetch per-SKU line items for a single Instamart PO from the portal's
+   * `listPurchaseOrderLines` endpoint.
+   *
+   * Endpoint: POST https://picker.swiggy.com/api/v1/listPurchaseOrderLines
+   * Auth:     abacus-token header (same JWT as all other Instamart calls)
+   * Body:     { filters: { purchase_order_id, brand_company_id }, pagination: { page_number, size } }
+   * Response: { status_code: 0, data: { purchase_order_lines: [...], total_records_count: N } }
+   * Item fields: external_item_code, description, qty (+ tax/price breakdown objects)
+   *
+   * Returns the raw line-item array. Throws InstamartAuthExpired on 401/403;
+   * InstamartAPIError on other failures. Callers should wrap in try/catch and
+   * fall back to the summary line on error.
+   */
+  async listPurchaseOrderLines(poNo: string): Promise<Record<string, unknown>[]> {
+    const PAGE_SIZE = 50;
+    const allLines: Record<string, unknown>[] = [];
+
+    for (let page = 1; page <= 20; page++) {
+      const res = await this.req("https://picker.swiggy.com/api/v1/listPurchaseOrderLines", {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({
+          filters: {
+            purchase_order_id: poNo,
+            brand_company_id: env.INSTAMART_BRAND_COMPANY_ID,
+          },
+          pagination: { page_number: page, size: PAGE_SIZE },
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) {
+        throw new InstamartAPIError(
+          `listPurchaseOrderLines HTTP ${res.status} for PO ${poNo}: ${(await res.text().catch(() => "")).slice(0, 200)}`,
+        );
+      }
+      const json = (await res.json().catch(() => null)) as unknown;
+      if (isRecord(json) && typeof json.status_code === "number" && json.status_code !== 0) {
+        throw new InstamartAPIError(
+          `listPurchaseOrderLines status_code=${json.status_code} for PO ${poNo}: ${String(json.message ?? "")}`,
+        );
+      }
+      const batch = extractList(json);
+      allLines.push(...batch);
+      const totalCount =
+        isRecord(json) && isRecord(json.data)
+          ? Number((json.data as Record<string, unknown>).total_records_count ?? 0)
+          : 0;
+      if (batch.length < PAGE_SIZE || (totalCount > 0 && allLines.length >= totalCount)) break;
+    }
+    return allLines;
+  }
 }
 
 // ── private helpers ────────────────────────────────────────────────────────────
@@ -395,7 +448,11 @@ function extractList(payload: unknown): Record<string, unknown>[] {
   const root = isRecord(payload) && isRecord(payload.data) ? payload.data : payload;
   if (Array.isArray(root)) return root.filter(isRecord);
   if (isRecord(root)) {
-    for (const k of ["purchase_orders", "purchaseOrders", "orders", "pos", "po_list", "results", "items", "list", "records", "line_items", "lineItems"]) {
+    for (const k of [
+      "purchase_order_lines", "purchaseOrderLines",
+      "purchase_orders", "purchaseOrders", "orders", "pos", "po_list",
+      "results", "items", "list", "records", "line_items", "lineItems",
+    ]) {
       if (Array.isArray(root[k])) return (root[k] as unknown[]).filter(isRecord);
     }
     // Fallback: first array-valued field.
