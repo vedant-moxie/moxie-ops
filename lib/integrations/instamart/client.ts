@@ -215,26 +215,26 @@ export class InstamartClient {
 
   /**
    * Download the PDF for a single Instamart PO via the confirmed batch/generate endpoint.
-   * Returns { content, filename } where filename ends in .pdf.
-   * Throws InstamartAuthExpired on 401/403; never throws into the allocate hot path
-   * (caller wraps in Promise.allSettled).
+   * Returns { content, filename } where filename ends in .pdf, or null if the API
+   * returns a non-success response (warning logged; caller wraps in Promise.allSettled).
    */
-  async downloadPoPdf(poId: string): Promise<{ content: Buffer; filename: string }> {
+  async downloadPoPdf(poId: string): Promise<{ content: Buffer; filename: string } | null> {
     return this.downloadPoDocument(poId, "pdf");
   }
 
   /**
    * Download the CSV for a single Instamart PO via the confirmed batch/generate endpoint.
    * Instamart exposes CSV (MIME_TYPE_CSV), not xlsx — returns filename ending in .csv.
+   * Returns null on non-success (warning logged; caller wraps in Promise.allSettled).
    */
-  async downloadPoExcel(poId: string): Promise<{ content: Buffer; filename: string }> {
+  async downloadPoExcel(poId: string): Promise<{ content: Buffer; filename: string } | null> {
     return this.downloadPoDocument(poId, "excel");
   }
 
   private async downloadPoDocument(
     poId: string,
     fmt: "pdf" | "excel",
-  ): Promise<{ content: Buffer; filename: string }> {
+  ): Promise<{ content: Buffer; filename: string } | null> {
     const ext = fmt === "pdf" ? "pdf" : "csv";
 
     // Env override: manually captured endpoint (set INSTAMART_PO_DOC_PATH from browser cURL)
@@ -267,8 +267,10 @@ export class InstamartClient {
     }
 
     // Primary: POST https://picker.swiggy.com/api/v1/document/batch/generate
-    // Auth: abacus-token header (same ozone-idp JWT as PO listing).
-    // MIME_TYPE_PDF → PDF attachment; MIME_TYPE_CSV → CSV attachment (Instamart's native export).
+    // The response is SYNCHRONOUS — the presigned S3 URL is returned immediately in:
+    //   body.document_generation_responses[n].document.document_url
+    // where body.document_generation_responses[n].document.mime_type matches mimeType.
+    // Fetch the S3 URL with a plain fetch (no auth — it is a presigned URL).
     const mimeType = fmt === "pdf" ? "MIME_TYPE_PDF" : "MIME_TYPE_CSV";
     const batchRes = await fetch("https://picker.swiggy.com/api/v1/document/batch/generate", {
       method: "POST",
@@ -288,83 +290,43 @@ export class InstamartClient {
       throw new InstamartAPIError(`Instamart batch/generate failed: HTTP ${batchRes.status} ${txt}`);
     }
 
-    const batchBody = await batchRes.json() as unknown;
-    const data = peelInstamartEnvelope(batchBody);
+    const body = await batchRes.json() as unknown;
 
-    if (isRecord(data)) {
-      // Sync path: direct URL in the response body
-      const directUrl = extractStringField(data, ["signed_url", "download_url", "url", "document_url"]);
-      if (directUrl) return this.fetchDocumentFromUrl(directUrl, poId, ext);
+    if (!isRecord(body) || body.status_code !== 0) {
+      console.warn(`[Instamart] batch/generate non-success for PO ${poId} (${mimeType}): ${JSON.stringify(body).slice(0, 300)}`);
+      return null;
+    }
 
-      // Sync path: documents array containing URLs
-      for (const key of ["documents", "document_list", "items"]) {
-        const list = data[key];
-        if (Array.isArray(list) && list.length > 0 && isRecord(list[0])) {
-          const docUrl = extractStringField(list[0] as Record<string, unknown>, ["signed_url", "download_url", "url", "document_url"]);
-          if (docUrl) return this.fetchDocumentFromUrl(docUrl, poId, ext);
+    const responses = Array.isArray(body.document_generation_responses)
+      ? (body.document_generation_responses as unknown[])
+      : [];
+
+    if (responses.length === 0) {
+      console.warn(`[Instamart] batch/generate empty document_generation_responses for PO ${poId} (${mimeType})`);
+      return null;
+    }
+
+    let documentUrl: string | null = null;
+    for (const r of responses) {
+      if (isRecord(r) && isRecord(r.document) && r.document.mime_type === mimeType) {
+        const url = r.document.document_url;
+        if (typeof url === "string" && url) {
+          documentUrl = url;
+          break;
         }
       }
+    }
 
-      // Async path: batch_id / document_id returned — poll the status endpoint
-      const batchId = String(
-        data.batch_id ?? data.batchId ?? data.id ?? data.document_id ?? data.documentId ?? ""
+    if (!documentUrl) {
+      console.warn(
+        `[Instamart] batch/generate: no document_url for mime_type=${mimeType} in PO ${poId}. ` +
+          `responses: ${JSON.stringify(responses).slice(0, 400)}`,
       );
-      if (batchId) return this.pollBatchDocument(batchId, poId, ext);
+      return null;
     }
 
-    throw new InstamartAPIError(
-      `Instamart batch/generate returned unexpected response for PO ${poId}. ` +
-        `Raw: ${JSON.stringify(data).slice(0, 400)}. ` +
-        `If this response contains a batch_id or document_id key with a different name, ` +
-        `report the raw response so the polling key can be added.`
-    );
-  }
-
-  private async pollBatchDocument(
-    batchId: string,
-    poId: string,
-    ext: string,
-  ): Promise<{ content: Buffer; filename: string }> {
-    const statusUrl = `https://picker.swiggy.com/api/v1/document/batch/${encodeURIComponent(batchId)}`;
-    const deadline = AbortSignal.timeout(13_000); // leave ~2s for the final download
-
-    for (let i = 0; i < 6; i++) {
-      await new Promise((r) => setTimeout(r, i === 0 ? 600 : 1_200));
-      let res: Response;
-      try {
-        res = await fetch(statusUrl, { method: "GET", headers: this.headers(), signal: deadline });
-      } catch {
-        continue;
-      }
-      if (res.status === 401 || res.status === 403) {
-        throw new InstamartAuthExpired(`auth expired polling Instamart batch ${batchId}`);
-      }
-      if (!res.ok) continue;
-
-      const poll = await res.json().catch(() => ({})) as unknown;
-      const data = peelInstamartEnvelope(poll);
-      if (!isRecord(data)) continue;
-
-      const status = String(data.status ?? "").toUpperCase();
-      if (status === "FAILED" || status === "ERROR") {
-        throw new InstamartAPIError(`Instamart batch ${batchId} generation failed: ${JSON.stringify(data).slice(0, 200)}`);
-      }
-
-      const pollUrl = extractStringField(data, ["signed_url", "download_url", "url", "document_url"]);
-      if (pollUrl) return this.fetchDocumentFromUrl(pollUrl, poId, ext);
-
-      for (const key of ["documents", "document_list", "items"]) {
-        const list = data[key];
-        if (Array.isArray(list) && list.length > 0 && isRecord(list[0])) {
-          const docUrl = extractStringField(list[0] as Record<string, unknown>, ["signed_url", "download_url", "url", "document_url"]);
-          if (docUrl) return this.fetchDocumentFromUrl(docUrl, poId, ext);
-        }
-      }
-    }
-
-    throw new InstamartAPIError(
-      `Instamart batch ${batchId} did not return a download URL within 15s for PO ${poId}`
-    );
+    // Presigned S3 URL — fetch without auth headers
+    return this.fetchDocumentFromUrl(documentUrl, poId, ext);
   }
 
   private async fetchDocumentFromUrl(
