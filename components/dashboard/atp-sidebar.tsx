@@ -76,7 +76,9 @@ export function AtpSidebar({
           return (
             <div key={r.skuId}>
               <div className="flex items-baseline justify-between gap-2">
-                <span className="truncate text-[13px] font-medium">{r.internalCode}</span>
+                <span className="truncate text-[13px] font-medium">
+                  {r.name || r.internalCode}
+                </span>
                 <span className="shrink-0 text-[13px] font-semibold nums">
                   {formatNumber(r.atpQty)}
                 </span>
@@ -88,6 +90,7 @@ export function AtpSidebar({
                 />
               </div>
               <div className="mt-1 text-[11px] text-muted-foreground">
+                {r.name && <span className="mr-1">{r.internalCode} ·</span>}
                 demand {formatNumber(d)} · ATP {formatNumber(r.atpQty)}
               </div>
             </div>

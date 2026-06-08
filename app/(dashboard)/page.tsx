@@ -18,7 +18,7 @@ export default function DashboardPage() {
     <>
       <Topbar
         title="Morning dashboard"
-        subtitle="Today's purchase orders, prioritised by urgency"
+        subtitle="All purchase orders, prioritised by urgency"
       />
       <main className="flex-1 px-5 py-6 lg:px-8">
         <Suspense fallback={<DashboardSkeleton />}>

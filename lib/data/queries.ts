@@ -35,9 +35,8 @@ export async function getDashboardData() {
       }),
       prisma.discrepancy.count({ where: { status: { in: ["OPEN", "DISPUTED"] } } }),
       prisma.purchaseOrder.findMany({
-        where: { status: { notIn: ["CLOSED"] } },
         orderBy: [{ priorityScore: "desc" }, { createdAt: "desc" }],
-        take: 40,
+        take: 500,
         select: {
           id: true,
           channelPoNumber: true,
