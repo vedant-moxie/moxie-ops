@@ -2,10 +2,12 @@ import "server-only";
 import nodemailer from "nodemailer";
 import { env, requireEnv } from "@/lib/env";
 import { nextEmailRefNumber } from "@/lib/services/email-ref-counter";
+import { getPoEmailRecipients } from "@/lib/services/app-settings";
 
 export interface PoPreparationEmailResult {
   messageId: string;
   to: string;
+  cc?: string;
 }
 
 export interface PoEmailLine {
@@ -28,6 +30,10 @@ export interface PoEmailData {
   attachments?: EmailAttachment[];
   /** If provided, overrides the default subject with `${PO_EMAIL_REF_PREFIX}${refNumber}`. */
   refNumber?: number;
+  /** Override To recipients (skips settings lookup when provided). */
+  to?: string[];
+  /** Override CC recipients (skips settings lookup when provided). */
+  cc?: string[];
 }
 
 function buildHtml(d: PoEmailData): string {
@@ -86,7 +92,13 @@ export async function sendPoPreparationEmail(data: PoEmailData): Promise<PoPrepa
 
   const user = env.PO_TEST_EMAIL_SMTP_USER;
   const pass = env.PO_TEST_EMAIL_SMTP_PASS!.replace(/\s+/g, "");
-  const to = env.PO_TEST_EMAIL_TO;
+
+  // Resolve recipients: use caller-supplied overrides, otherwise read from settings
+  const configured = await getPoEmailRecipients();
+  const toList = data.to && data.to.length > 0 ? data.to : configured.to;
+  const ccList = data.cc !== undefined ? data.cc : configured.cc;
+  const toStr = toList.join(", ");
+  const ccStr = ccList.join(", ");
 
   // Assign and persist the next reference number for this send
   const refNum = data.refNumber ?? (await nextEmailRefNumber());
@@ -99,9 +111,9 @@ export async function sendPoPreparationEmail(data: PoEmailData): Promise<PoPrepa
     auth: { user, pass },
   });
 
-  const info = await transport.sendMail({
+  const mailOptions: Parameters<typeof transport.sendMail>[0] = {
     from: `"Moxie Ops" <${user}>`,
-    to,
+    to: toStr,
     subject,
     html: buildHtml(data),
     text: buildText(data),
@@ -110,7 +122,10 @@ export async function sendPoPreparationEmail(data: PoEmailData): Promise<PoPrepa
       content: a.content,
       contentType: a.contentType,
     })),
-  });
+  };
+  if (ccStr) mailOptions.cc = ccStr;
 
-  return { messageId: info.messageId as string, to };
+  const info = await transport.sendMail(mailOptions);
+
+  return { messageId: info.messageId as string, to: toStr, cc: ccStr || undefined };
 }
