@@ -5,9 +5,32 @@ import { InstamartClient, InstamartAuthExpired } from "@/lib/integrations/instam
 import { ingestLiveInstamartPOs, type IngestSummary } from "@/lib/services/instamart-ingest";
 
 const IST_OFFSET_MS = 5.5 * 3_600_000;
+const PO_FETCH_CONCURRENCY = 10;
+const PO_FETCH_TIMEOUT_MS = 10_000;
 
 /** @deprecated The PO endpoint now has a sensible default — this is kept for API compatibility. */
 export class InstamartSyncNotConfigured extends Error {}
+
+/** Run `fn` over `items` with at most `concurrency` in-flight at once. */
+async function pooledMap<T, R>(items: T[], fn: (item: T) => Promise<R>, concurrency: number): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const idx = next++;
+      results[idx] = await fn(items[idx]!);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms)),
+  ]);
+}
 
 /** A date N days ago in IST as YYYY-MM-DD. */
 function istDaysAgo(n: number): string {
@@ -42,24 +65,19 @@ export async function syncInstamart(opts: { since?: string; until?: string; acto
     const client = new InstamartClient(tokens);
     const summaries = await client.listPurchaseOrders({ since, until });
 
-    // Hydrate each PO with per-SKU line items from listPurchaseOrderLines.
-    // Falls back gracefully to the summary line in ingest if the fetch fails.
-    const hydrated: Record<string, unknown>[] = [];
-    for (const po of summaries) {
+    // Hydrate each PO with per-SKU line items from listPurchaseOrderLines (bounded concurrency).
+    // Falls back gracefully to the summary line in ingest if the fetch fails or times out.
+    const hydrated = await pooledMap(summaries, async (po) => {
       const poNo = pickPoNo(po);
-      if (!poNo) { hydrated.push(po); continue; }
+      if (!poNo) return po;
       try {
-        const lines = await client.listPurchaseOrderLines(poNo);
-        if (lines.length) {
-          hydrated.push({ ...po, line_items: lines });
-        } else {
-          hydrated.push(po);
-        }
+        const lines = await withTimeout(client.listPurchaseOrderLines(poNo), PO_FETCH_TIMEOUT_MS);
+        return lines.length ? { ...po, line_items: lines } : po;
       } catch (err) {
         console.warn(`[instamart-sync] lines fetch failed for PO ${poNo}: ${err instanceof Error ? err.message : err}`);
-        hydrated.push(po); // keep header if detail fails
+        return po; // keep header if detail fails
       }
-    }
+    }, PO_FETCH_CONCURRENCY);
     return hydrated;
   };
 

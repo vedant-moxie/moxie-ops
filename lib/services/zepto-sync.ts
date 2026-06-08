@@ -5,9 +5,32 @@ import { ZeptoClient, ZeptoAuthExpired, type RawZeptoPo } from "@/lib/integratio
 import { ingestLiveZeptoPOs, type IngestSummary } from "@/lib/services/zepto-ingest";
 
 const IST_OFFSET_MS = 5.5 * 3_600_000;
+const PO_FETCH_CONCURRENCY = 10;
+const PO_FETCH_TIMEOUT_MS = 10_000;
 
 /** @deprecated The PO endpoint now has a sensible default — this is kept for API compatibility. */
 export class ZeptoSyncNotConfigured extends Error {}
+
+/** Run `fn` over `items` with at most `concurrency` in-flight at once. */
+async function pooledMap<T, R>(items: T[], fn: (item: T) => Promise<R>, concurrency: number): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const idx = next++;
+      results[idx] = await fn(items[idx]!);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms)),
+  ]);
+}
 
 /** A date N days ago in IST as YYYY-MM-DD. */
 function istDaysAgo(n: number): string {
@@ -53,19 +76,19 @@ export async function syncZepto(opts: { since?: string; until?: string; actorLab
     const client = new ZeptoClient(tokens);
     const pos = await client.listPurchaseOrders({ since, until });
 
-    // Hydrate each PO with per-SKU line items from the items endpoint.
-    // Falls back to the summary line in ingest if the fetch fails.
-    for (const po of pos) {
-      if (findLineArray(po)) continue;
+    // Hydrate each PO with per-SKU line items from the items endpoint (bounded concurrency).
+    // Falls back to the summary line in ingest if the fetch fails or times out.
+    await pooledMap(pos, async (po) => {
+      if (findLineArray(po)) return;
       const poId = String(po.id ?? po.poId ?? po.poNumber ?? po.po_number ?? "");
-      if (!poId) continue;
+      if (!poId) return;
       try {
-        const items = await client.fetchPoItems(poId);
+        const items = await withTimeout(client.fetchPoItems(poId), PO_FETCH_TIMEOUT_MS);
         if (items.length) (po as Record<string, unknown>).items = items;
       } catch (err) {
         console.warn(`[zepto-sync] items fetch failed for PO ${poId}: ${err instanceof Error ? err.message : err}`);
       }
-    }
+    }, PO_FETCH_CONCURRENCY);
     return pos;
   };
 
