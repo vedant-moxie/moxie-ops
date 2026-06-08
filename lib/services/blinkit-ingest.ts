@@ -139,7 +139,11 @@ export async function ingestBlinkitDump(
     gi++;
     const head = rows[0]!;
     const poDate = toDate(get(head, "poDate"));
-    const deliveryDate = toDate(get(head, "deliveryDate"));
+    // appointment_date is almost always empty in Blinkit exports; fall back to expiry_date.
+    const deliveryDate =
+      toDate(head["appointment_date"]) ??
+      toDate(head["expiry_date"]) ??
+      toDate(get(head, "deliveryDate"));
 
     const rawStatus = (get(head, "status") ?? "").trim().toLowerCase();
 

@@ -170,7 +170,7 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                       return (
                         <TableRow key={li.id} className={tv?.mismatch ? "bg-amber-50/50 dark:bg-amber-950/10" : undefined}>
                           <TableCell className="font-mono text-xs">{li.channelSkuCode ?? li.sku.internalCode}</TableCell>
-                          <TableCell className="font-mono text-xs text-muted-foreground">{raw.upc ?? "—"}</TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">{raw.upc ?? raw.eanNo ?? "—"}</TableCell>
                           <TableCell className="max-w-[280px]">
                             <div className="truncate text-sm">{li.sku.name}</div>
                           </TableCell>
@@ -303,12 +303,16 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                 <CardContent>
                   <div className="grid grid-cols-1 gap-x-8 gap-y-1.5 sm:grid-cols-2">
                     {Object.entries(po.rawData as Record<string, unknown>)
-                      .filter(([, v]) => v != null && String(v ?? "").trim() !== "")
+                      .filter(([, v]) => {
+                        if (v == null) return false;
+                        if (typeof v === "object" && !Array.isArray(v)) return false;
+                        const s = String(v);
+                        return s.trim() !== "" && s !== "[object Object]";
+                      })
                       .map(([k, v]) => {
+                        const arr = v as unknown[];
                         const display = Array.isArray(v)
-                          ? `[${v.length} items]`
-                          : typeof v === "object"
-                          ? JSON.stringify(v).slice(0, 80)
+                          ? `${arr.length} item${arr.length !== 1 ? "s" : ""}`
                           : String(v);
                         return (
                           <div key={k} className="flex justify-between gap-3 border-b border-border/40 py-1 text-sm">
