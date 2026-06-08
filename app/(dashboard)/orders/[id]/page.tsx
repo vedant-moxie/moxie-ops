@@ -354,12 +354,12 @@ function ContextActions({ status, poId }: { status: string; poId: string }) {
     case "PENDING_REVIEW":
     case "PRIORITISED":
       return (
-        <Button asChild><Link href="/allocate">Go to allocation grid</Link></Button>
+        <Button asChild><Link href={`/allocate/${poId}`}>Allocate this PO</Link></Button>
       );
     case "APPROVED":
       return (
         <Button variant="outline" asChild>
-          <Link href="/allocate"><Mail className="h-4 w-4" /> Manage allocation</Link>
+          <Link href={`/allocate/${poId}`}><Mail className="h-4 w-4" /> Manage allocation</Link>
         </Button>
       );
     case "DELIVERED":
