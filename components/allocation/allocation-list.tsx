@@ -2,13 +2,16 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, ClipboardCheck } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { ArrowRight, ClipboardCheck, SendHorizonal } from "lucide-react";
 import type { PoStatus } from "@prisma/client";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ChannelChip } from "@/components/shared/channel-chip";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -28,7 +31,12 @@ export interface AllocRow {
 }
 
 export function AllocationList({ rows }: { rows: AllocRow[] }) {
+  const router = useRouter();
   const [q, setQ] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [sending, setSending] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return rows;
@@ -38,6 +46,73 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
         (r.facility ?? "").toLowerCase().includes(s),
     );
   }, [rows, q]);
+
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every((r) => selected.has(r.id));
+  const someFilteredSelected = filtered.some((r) => selected.has(r.id));
+
+  function toggleAll() {
+    if (allFilteredSelected) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        filtered.forEach((r) => next.delete(r.id));
+        return next;
+      });
+    } else {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        filtered.forEach((r) => next.add(r.id));
+        return next;
+      });
+    }
+  }
+
+  function toggleRow(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function bulkSend() {
+    const poIds = Array.from(selected);
+    if (poIds.length === 0) return;
+
+    setSending(true);
+    setProgress({ done: 0, total: poIds.length });
+
+    try {
+      const res = await fetch("/api/pos/allocate-bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ poIds }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error ?? "Bulk allocation failed");
+
+      const results: { poId: string; ok: boolean; error?: string }[] = json.data.results;
+      const succeeded = results.filter((r) => r.ok).length;
+      const failed = results.filter((r) => !r.ok).length;
+
+      setProgress({ done: poIds.length, total: poIds.length });
+
+      if (failed === 0) {
+        toast.success(`Sent ${succeeded} PO${succeeded !== 1 ? "s" : ""}`);
+      } else {
+        toast.warning(`Sent ${succeeded} PO${succeeded !== 1 ? "s" : ""} · ${failed} failed`);
+      }
+
+      setSelected(new Set());
+      router.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Bulk send failed");
+    } finally {
+      setSending(false);
+      setProgress(null);
+    }
+  }
 
   if (rows.length === 0) {
     return (
@@ -49,9 +124,11 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
     );
   }
 
+  const selectedCount = selected.size;
+
   return (
     <div>
-      <div className="px-5 pb-3 pt-1">
+      <div className="px-5 pb-3 pt-1 flex items-center gap-3">
         <Input
           placeholder="Search PO number or facility…"
           value={q}
@@ -59,9 +136,24 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
           className="h-9 max-w-xs"
         />
       </div>
+
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
+            <TableHead className="w-10">
+              <Checkbox
+                checked={allFilteredSelected}
+                data-state={
+                  allFilteredSelected
+                    ? "checked"
+                    : someFilteredSelected
+                    ? "indeterminate"
+                    : "unchecked"
+                }
+                onCheckedChange={toggleAll}
+                aria-label="Select all filtered"
+              />
+            </TableHead>
             <TableHead>Channel</TableHead>
             <TableHead>PO Number</TableHead>
             <TableHead>Facility</TableHead>
@@ -76,8 +168,16 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
         <TableBody>
           {filtered.map((r) => {
             const progress = r.orderedUnits > 0 ? (r.allocatedUnits / r.orderedUnits) * 100 : 0;
+            const isSelected = selected.has(r.id);
             return (
-              <TableRow key={r.id} className="group">
+              <TableRow key={r.id} className={cn("group", isSelected && "bg-muted/40")}>
+                <TableCell>
+                  <Checkbox
+                    checked={isSelected}
+                    onCheckedChange={() => toggleRow(r.id)}
+                    aria-label={`Select PO ${r.channelPoNumber ?? r.id}`}
+                  />
+                </TableCell>
                 <TableCell><ChannelChip name={r.channel.name} color={r.channel.logoColor} /></TableCell>
                 <TableCell className="font-medium">{r.channelPoNumber}</TableCell>
                 <TableCell className="max-w-[200px] truncate text-muted-foreground">{r.facility ?? "—"}</TableCell>
@@ -105,6 +205,25 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
           })}
         </TableBody>
       </Table>
+
+      {/* Sticky action bar */}
+      {selectedCount > 0 && (
+        <div className="sticky bottom-4 mx-4 mt-4 flex items-center justify-between gap-4 rounded-xl border border-border/70 bg-card px-4 py-3 shadow-lg">
+          <span className="text-sm text-muted-foreground">
+            {selectedCount} PO{selectedCount !== 1 ? "s" : ""} selected
+          </span>
+          <Button
+            onClick={bulkSend}
+            disabled={sending}
+            className="gap-2"
+          >
+            <SendHorizonal className="h-4 w-4" />
+            {sending && progress
+              ? `Sending ${progress.done + 1}/${progress.total}…`
+              : `Allocate full & send (${selectedCount})`}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

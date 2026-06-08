@@ -32,7 +32,7 @@ export function PoAllocator({
 }) {
   const router = useRouter();
   const [alloc, setAlloc] = useState<Record<string, number>>(() =>
-    Object.fromEntries(lines.map((l) => [l.skuId, l.approvedQty ?? 0])),
+    Object.fromEntries(lines.map((l) => [l.skuId, l.approvedQty ?? l.requestedQty ?? 0])),
   );
   const [saving, setSaving] = useState(false);
 
