@@ -135,6 +135,18 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
           onChange={(e) => setQ(e.target.value)}
           className="h-9 max-w-xs"
         />
+        {selectedCount > 0 && (
+          <Button
+            onClick={bulkSend}
+            disabled={sending}
+            className="gap-2 shrink-0"
+          >
+            <SendHorizonal className="h-4 w-4" />
+            {sending && progress
+              ? `Sending ${progress.done + 1}/${progress.total}…`
+              : `Allocate full & send (${selectedCount})`}
+          </Button>
+        )}
       </div>
 
       <Table>
@@ -206,22 +218,29 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
         </TableBody>
       </Table>
 
-      {/* Sticky action bar */}
+      {/* Floating action bar — always visible when POs are selected */}
       {selectedCount > 0 && (
-        <div className="sticky bottom-4 mx-4 mt-4 flex items-center justify-between gap-4 rounded-xl border border-border/70 bg-card px-4 py-3 shadow-lg">
-          <span className="text-sm text-muted-foreground">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-4 rounded-full border border-border/70 bg-card px-5 py-3 shadow-xl">
+          <span className="text-sm text-muted-foreground whitespace-nowrap">
             {selectedCount} PO{selectedCount !== 1 ? "s" : ""} selected
           </span>
           <Button
             onClick={bulkSend}
             disabled={sending}
-            className="gap-2"
+            className="gap-2 rounded-full"
           >
             <SendHorizonal className="h-4 w-4" />
             {sending && progress
               ? `Sending ${progress.done + 1}/${progress.total}…`
               : `Allocate full & send (${selectedCount})`}
           </Button>
+          <button
+            onClick={() => setSelected(new Set())}
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
+            aria-label="Clear selection"
+          >
+            Clear
+          </button>
         </div>
       )}
     </div>
