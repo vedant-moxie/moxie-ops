@@ -63,14 +63,12 @@ export function SettingsTabs({
   skus,
   warehouseEmail,
   spreadsheetId,
-  emailRecipients,
   locationRecipients,
 }: {
   channels: Channel[];
   skus: Sku[];
   warehouseEmail: string;
   spreadsheetId: string;
-  emailRecipients: { to: string[]; cc: string[] };
   locationRecipients: LocationRecipientsMap;
 }) {
   const router = useRouter();
@@ -262,7 +260,6 @@ Reference ID: {warehouseInstructionId}`}
 
       {/* Email recipients */}
       <TabsContent value="email" className="space-y-6">
-        <EmailRecipientsCard initialTo={emailRecipients.to} initialCc={emailRecipients.cc} />
         {DISPATCH_LOCATIONS.map((loc) => (
           <LocationRecipientsCard
             key={loc}
@@ -284,96 +281,6 @@ Reference ID: {warehouseInstructionId}`}
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function parseEmails(raw: string): string[] {
-  return raw
-    .split(/[\n,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function EmailRecipientsCard({
-  initialTo,
-  initialCc,
-}: {
-  initialTo: string[];
-  initialCc: string[];
-}) {
-  const router = useRouter();
-  const [toRaw, setToRaw] = useState(initialTo.join("\n"));
-  const [ccRaw, setCcRaw] = useState(initialCc.join("\n"));
-  const [saving, setSaving] = useState(false);
-
-  function validate(): string | null {
-    const to = parseEmails(toRaw);
-    const cc = parseEmails(ccRaw);
-    if (to.length === 0) return "At least one To address is required.";
-    const invalid = [...to, ...cc].filter((e) => !EMAIL_RE.test(e));
-    if (invalid.length) return `Invalid email(s): ${invalid.join(", ")}`;
-    return null;
-  }
-
-  async function save() {
-    const err = validate();
-    if (err) { toast.error(err); return; }
-    setSaving(true);
-    try {
-      const res = await fetch("/api/settings/email-recipients", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to: parseEmails(toRaw), cc: parseEmails(ccRaw) }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error ?? "Save failed");
-      }
-      toast.success("Email recipients saved");
-      router.refresh();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">PO preparation email recipients</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-5 sm:max-w-md">
-        <div className="grid gap-1.5">
-          <Label htmlFor="email-to">Send to</Label>
-          <p className="text-xs text-muted-foreground">One email per line (or comma-separated).</p>
-          <textarea
-            id="email-to"
-            rows={3}
-            value={toRaw}
-            onChange={(e) => setToRaw(e.target.value)}
-            placeholder="abhishek@moxiebeauty.in"
-            className="flex w-full rounded-lg border border-input bg-card px-3.5 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:border-ring disabled:cursor-not-allowed disabled:opacity-50 resize-none"
-          />
-        </div>
-        <div className="grid gap-1.5">
-          <Label htmlFor="email-cc">CC</Label>
-          <p className="text-xs text-muted-foreground">Optional. One email per line (or comma-separated).</p>
-          <textarea
-            id="email-cc"
-            rows={3}
-            value={ccRaw}
-            onChange={(e) => setCcRaw(e.target.value)}
-            placeholder="ops@moxiebeauty.in"
-            className="flex w-full rounded-lg border border-input bg-card px-3.5 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:border-ring disabled:cursor-not-allowed disabled:opacity-50 resize-none"
-          />
-        </div>
-        <Button onClick={save} disabled={saving}>
-          {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-          Save recipients
-        </Button>
-      </CardContent>
-    </Card>
-  );
-}
 
 function RecipientRowsEditor({
   label,
