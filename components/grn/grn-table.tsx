@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Mail, Globe, FileSpreadsheet, CheckCircle2 } from "lucide-react";
+import { Mail, Globe, FileSpreadsheet, CheckCircle2, ExternalLink } from "lucide-react";
 import type { GrnSource, GrnStatus } from "@prisma/client";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -26,7 +26,28 @@ export interface GrnRow {
   receivedAt: Date | string;
   totalAcceptedValue: number | null;
   po: { id: string; channelPoNumber: string | null; channel: { name: string; logoColor: string | null } };
-  _count: { lineItems: number; discrepancies: number };
+  _count: { lineItems: number };
+  totalOrdered: number;
+  totalReceived: number;
+  fillRatePct: number;
+  isPerfect: boolean;
+  discrepancyCount: number;
+  variances: Array<{ internalCode: string; name: string; ordered: number; received: number; variance: number }>;
+}
+
+function MatchBadge({ isPerfect, fillRatePct, variances }: Pick<GrnRow, "isPerfect" | "fillRatePct" | "variances">) {
+  if (isPerfect) {
+    return <Badge variant="success">100% · Perfect</Badge>;
+  }
+  const shortCount = variances.filter((v) => v.variance < 0).length;
+  const excessCount = variances.filter((v) => v.variance > 0).length;
+  const label =
+    shortCount > 0 && excessCount > 0
+      ? `${fillRatePct}% · ${shortCount} short, ${excessCount} excess`
+      : shortCount > 0
+        ? `${fillRatePct}% · short ${shortCount}`
+        : `${fillRatePct}% · excess ${excessCount}`;
+  return <Badge variant={fillRatePct < 80 ? "danger" : "warning"}>{label}</Badge>;
 }
 
 export function GrnTable({ grns }: { grns: GrnRow[] }) {
@@ -48,8 +69,10 @@ export function GrnTable({ grns }: { grns: GrnRow[] }) {
           <TableHead>Source</TableHead>
           <TableHead className="text-right">Lines</TableHead>
           <TableHead className="text-right">Discrepancies</TableHead>
+          <TableHead>Match</TableHead>
           <TableHead>Received</TableHead>
           <TableHead>Status</TableHead>
+          <TableHead />
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -62,9 +85,7 @@ export function GrnTable({ grns }: { grns: GrnRow[] }) {
                 <ChannelChip name={grn.po.channel.name} color={grn.po.channel.logoColor} />
               </TableCell>
               <TableCell>
-                <Link href={`/orders/${grn.po.id}`} className="font-medium hover:underline">
-                  {grn.channelGrnNumber ?? "—"}
-                </Link>
+                <div className="font-medium">{grn.channelGrnNumber ?? "—"}</div>
                 <div className="text-xs text-muted-foreground">{grn.po.channelPoNumber}</div>
               </TableCell>
               <TableCell>
@@ -76,14 +97,30 @@ export function GrnTable({ grns }: { grns: GrnRow[] }) {
                 {grn._count.lineItems}
               </TableCell>
               <TableCell className="text-right nums">
-                {grn._count.discrepancies > 0 ? (
-                  <Badge variant="danger">{grn._count.discrepancies}</Badge>
+                {grn.discrepancyCount > 0 ? (
+                  <Badge variant="danger">{grn.discrepancyCount}</Badge>
                 ) : (
                   <span className="text-muted-foreground">0</span>
                 )}
               </TableCell>
+              <TableCell>
+                <MatchBadge
+                  isPerfect={grn.isPerfect}
+                  fillRatePct={grn.fillRatePct}
+                  variances={grn.variances}
+                />
+              </TableCell>
               <TableCell className="text-muted-foreground">{formatDate(grn.receivedAt)}</TableCell>
               <TableCell><Badge variant={meta.variant}>{meta.label}</Badge></TableCell>
+              <TableCell>
+                <Link
+                  href={`/orders/${grn.po.id}#grn`}
+                  className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
+                >
+                  {grn.isPerfect ? "View breakdown" : "View discrepancies"}
+                  <ExternalLink className="h-3 w-3" />
+                </Link>
+              </TableCell>
             </TableRow>
           );
         })}

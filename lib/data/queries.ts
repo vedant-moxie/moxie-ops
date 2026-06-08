@@ -193,7 +193,7 @@ export async function getSkus() {
 }
 
 export async function getGrns() {
-  return prisma.grnRecord.findMany({
+  const records = await prisma.grnRecord.findMany({
     orderBy: { receivedAt: "desc" },
     select: {
       id: true,
@@ -207,10 +207,78 @@ export async function getGrns() {
           id: true,
           channelPoNumber: true,
           channel: { select: { name: true, logoColor: true } },
+          lineItems: {
+            select: {
+              skuId: true,
+              requestedQty: true,
+              sku: { select: { internalCode: true, name: true } },
+            },
+          },
         },
       },
-      _count: { select: { lineItems: true, discrepancies: true } },
+      lineItems: {
+        select: {
+          skuId: true,
+          receivedQty: true,
+          sku: { select: { internalCode: true, name: true } },
+        },
+      },
+      _count: { select: { lineItems: true } },
     },
+  });
+
+  return records.map((r) => {
+    const orderedBySku = new Map(
+      r.po.lineItems.map((l) => [l.skuId, { qty: l.requestedQty, sku: l.sku }]),
+    );
+    const receivedBySku = new Map(
+      r.lineItems.map((l) => [l.skuId, { qty: l.receivedQty, sku: l.sku }]),
+    );
+
+    const totalOrdered = r.po.lineItems.reduce((s, l) => s + l.requestedQty, 0);
+    const totalReceived = r.lineItems.reduce((s, l) => s + l.receivedQty, 0);
+    const fillRatePct = totalOrdered > 0 ? Math.round((totalReceived / totalOrdered) * 100) : 0;
+
+    const allSkuIds = new Set([...orderedBySku.keys(), ...receivedBySku.keys()]);
+    const variances: Array<{
+      internalCode: string;
+      name: string;
+      ordered: number;
+      received: number;
+      variance: number;
+    }> = [];
+
+    for (const skuId of allSkuIds) {
+      const ordered = orderedBySku.get(skuId)?.qty ?? 0;
+      const received = receivedBySku.get(skuId)?.qty ?? 0;
+      if (received !== ordered) {
+        const skuInfo = orderedBySku.get(skuId)?.sku ?? receivedBySku.get(skuId)?.sku;
+        variances.push({
+          internalCode: skuInfo?.internalCode ?? skuId,
+          name: skuInfo?.name ?? skuId,
+          ordered,
+          received,
+          variance: received - ordered,
+        });
+      }
+    }
+
+    return {
+      id: r.id,
+      source: r.source,
+      channelGrnNumber: r.channelGrnNumber,
+      status: r.status,
+      receivedAt: r.receivedAt,
+      totalAcceptedValue: r.totalAcceptedValue,
+      po: { id: r.po.id, channelPoNumber: r.po.channelPoNumber, channel: r.po.channel },
+      _count: { lineItems: r._count.lineItems },
+      totalOrdered,
+      totalReceived,
+      fillRatePct,
+      isPerfect: variances.length === 0,
+      discrepancyCount: variances.length,
+      variances,
+    };
   });
 }
 

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Truck, Mail, FileText } from "lucide-react";
+import { ArrowLeft, Truck, Mail, FileText, PackageCheck } from "lucide-react";
 import { Topbar } from "@/components/layout/topbar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,39 @@ export default async function OrderDetailPage({ params }: { params: { id: string
 
   const dispatchedBySku = new Map(po.dispatchRecord?.lineItems.map((l) => [l.skuId, l.dispatchedQty]) ?? []);
   const receivedBySku = new Map(po.grnRecord?.lineItems.map((l) => [l.skuId, l.receivedQty]) ?? []);
+
+  // Compute ordered-vs-received discrepancy breakdown for GRN section
+  const grnVariances = po.grnRecord
+    ? (() => {
+        const orderedBySku = new Map(po.lineItems.map((l) => [l.skuId, l.requestedQty]));
+        const allSkuIds = new Set([...orderedBySku.keys(), ...receivedBySku.keys()]);
+        return Array.from(allSkuIds).map((skuId) => {
+          const ordered = orderedBySku.get(skuId) ?? 0;
+          const received = receivedBySku.get(skuId) ?? 0;
+          const li = po.lineItems.find((l) => l.skuId === skuId);
+          const grnLi = po.grnRecord!.lineItems.find((l) => l.skuId === skuId);
+          return {
+            skuId,
+            internalCode: li?.sku.internalCode ?? grnLi?.skuId ?? skuId,
+            name: li?.sku.name ?? "—",
+            channelSkuCode: li?.channelSkuCode ?? null,
+            ordered,
+            received,
+            variance: received - ordered,
+          };
+        });
+      })()
+    : null;
+
+  const totalOrdered = po.lineItems.reduce((s, l) => s + l.requestedQty, 0);
+  const totalReceived = po.grnRecord
+    ? po.grnRecord.lineItems.reduce((s, l) => s + l.receivedQty, 0)
+    : null;
+  const fillRatePct =
+    totalOrdered > 0 && totalReceived != null
+      ? Math.round((totalReceived / totalOrdered) * 100)
+      : null;
+  const grnIsPerfect = grnVariances != null && grnVariances.every((v) => v.variance === 0);
 
   return (
     <>
@@ -137,6 +170,64 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                 </Table>
               </CardContent>
             </Card>
+
+            {/* Ordered vs Received (GRN) breakdown */}
+            {po.grnRecord && grnVariances && (
+              <Card id="grn">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <PackageCheck className="h-4 w-4 text-muted-foreground" />
+                    Ordered vs Received · GRN
+                    {grnIsPerfect ? (
+                      <Badge variant="success" className="ml-2">100% · Perfect</Badge>
+                    ) : (
+                      <Badge variant={fillRatePct != null && fillRatePct < 80 ? "danger" : "warning"} className="ml-2">
+                        {fillRatePct ?? 0}% · {grnVariances.filter((v) => v.variance !== 0).length} SKU{grnVariances.filter((v) => v.variance !== 0).length !== 1 ? "s" : ""} differ
+                      </Badge>
+                    )}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead>SKU</TableHead>
+                        <TableHead>Product</TableHead>
+                        <TableHead className="text-right">Ordered</TableHead>
+                        <TableHead className="text-right">Received</TableHead>
+                        <TableHead className="text-right">Variance</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {grnVariances.map((v) => {
+                        const tone =
+                          v.variance === 0 ? "text-success"
+                            : v.variance < 0 ? "text-danger"
+                            : "text-warning";
+                        return (
+                          <TableRow key={v.skuId} className={v.variance !== 0 ? "bg-muted/30" : undefined}>
+                            <TableCell className="font-mono text-xs">
+                              {v.channelSkuCode ?? v.internalCode}
+                            </TableCell>
+                            <TableCell>
+                              <div className="text-sm">{v.name}</div>
+                              {v.channelSkuCode && (
+                                <div className="text-xs text-muted-foreground">{v.internalCode}</div>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right nums">{v.ordered}</TableCell>
+                            <TableCell className="text-right nums">{v.received}</TableCell>
+                            <TableCell className={cn("text-right nums font-medium", tone)}>
+                              {v.variance === 0 ? "—" : v.variance > 0 ? `+${v.variance}` : v.variance}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            )}
 
             {(po.dispatchRecord || po.invoice) && (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
