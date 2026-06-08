@@ -115,8 +115,9 @@ export async function ingestLiveInstamartPOs(
     const poDate = epochMs(po.po_date ?? po.poDate);
     const expiryDate = epochMs(po.expiry_date ?? po.expiryDate);
     const totalQty = Math.max(0, Math.round(Number(po.total_quantity ?? po.totalQuantity ?? po.total_qty ?? 0) || 0));
+    // PO-level received total — Instamart listPurchaseOrderLines has no per-SKU received field,
+    // so this is the only GRN signal available.
     const grnQty = Math.max(0, Math.round(Number(po.grn_quantity ?? po.grnQuantity ?? 0) || 0));
-    const pendingQty = Math.max(0, Math.round(Number(po.pending_quantity ?? po.pendingQuantity ?? 0) || 0));
     const totalValue = Number(po.value ?? po.totalValue ?? po.total_value ?? 0) || null;
     const statusRaw = String(po.status ?? "");
     const receivingStatusRaw = String(po.receiving_status ?? po.receivingStatus ?? "");
@@ -157,6 +158,21 @@ export async function ingestLiveInstamartPOs(
       resolvedLines.push({ skuId, channelSkuCode: spec.code, requestedQty: spec.qty, unitPrice: spec.unitPrice, rawData: spec.rawData });
     }
 
+    // Instamart exposes no per-SKU received qty in listPurchaseOrderLines — distribute
+    // the PO-level grn_quantity proportionally across lines by ordered weight.
+    const totalOrderedForGrn = resolvedLines.reduce((s, l) => s + l.requestedQty, 0);
+    const buildGrnLineItems = (grnTotal: number) => {
+      if (grnTotal <= 0 || totalOrderedForGrn <= 0) return [];
+      // Proportional: each line receives (lineQty / totalOrdered) * grnTotal, capped at lineQty.
+      return resolvedLines
+        .map((l) => ({
+          skuId: l.skuId,
+          receivedQty: Math.min(l.requestedQty, Math.round((l.requestedQty / totalOrderedForGrn) * grnTotal)),
+          rejectedQty: 0 as const,
+        }))
+        .filter((l) => l.receivedQty > 0);
+    };
+
     const externalId = `instamart:${poNo}`;
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const dbPo = await tx.purchaseOrder.upsert({
@@ -177,20 +193,16 @@ export async function ingestLiveInstamartPOs(
 
       await tx.discrepancy.deleteMany({ where: { poId: dbPo.id } });
       await tx.grnRecord.deleteMany({ where: { poId: dbPo.id } });
-      if (grnQty > 0 && resolvedLines.length > 0) {
+      // Instamart has no per-SKU received field; distribute PO-level grn_quantity proportionally.
+      const grnLineItems = buildGrnLineItems(grnQty);
+      if (grnLineItems.length > 0) {
         const allReceived = grnQty >= totalQty && totalQty > 0;
         await tx.grnRecord.create({
           data: {
             poId: dbPo.id, source: "PORTAL", channelGrnNumber: null,
             status: allReceived ? "ACCEPTED" : "PENDING_RECONCILIATION",
             receivedAt: expiryDate ?? poDate,
-            lineItems: {
-              create: resolvedLines.map((l) => ({
-                skuId: l.skuId,
-                receivedQty: Math.min(grnQty, l.requestedQty),
-                rejectedQty: 0,
-              })),
-            },
+            lineItems: { create: grnLineItems },
           },
         });
       }

@@ -478,8 +478,11 @@ const ZEPTO_CSV_COL_MAP: Array<{ keys: string[]; header: string }> = [
   { keys: ["skuName", "sku_name", "product_name", "productName", "item_name", "itemName", "name", "description", "product_description"], header: "Product Name" },
   { keys: ["brand", "brand_name", "brandName"], header: "Brand" },
   { keys: ["category", "category_name", "categoryName", "category_display_name", "categoryDisplayName"], header: "Category" },
-  // poQty is the Zepto-native ordered-quantity field
+  // poQty is the Zepto-native ordered-quantity field; grnQty is the confirmed received qty
   { keys: ["poQty", "po_qty", "ordered_qty", "orderedQty", "quantity", "qty", "order_quantity", "orderQuantity", "requested_qty", "requestedQty"], header: "Ordered Qty" },
+  { keys: ["asnQty", "asn_qty"], header: "ASN Qty" },
+  { keys: ["grnQty", "grn_qty", "receivedQty", "received_qty"], header: "GRN Qty" },
+  { keys: ["remainingQty", "remaining_qty"], header: "Remaining Qty" },
   { keys: ["mrp", "max_retail_price", "maxRetailPrice"], header: "MRP" },
   { keys: ["unitPrice", "unit_price", "selling_price", "sellingPrice", "price"], header: "Price" },
   { keys: ["totalValue", "total_value", "total_amount", "totalAmount"], header: "Total Value" },

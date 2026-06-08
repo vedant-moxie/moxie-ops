@@ -268,13 +268,20 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                 <CardContent>
                   <div className="grid grid-cols-1 gap-x-8 gap-y-1.5 sm:grid-cols-2">
                     {Object.entries(po.rawData as Record<string, unknown>)
-                      .filter(([, v]) => String(v ?? "").trim() !== "")
-                      .map(([k, v]) => (
-                        <div key={k} className="flex justify-between gap-3 border-b border-border/40 py-1 text-sm">
-                          <span className="text-muted-foreground">{k}</span>
-                          <span className="text-right font-medium">{String(v)}</span>
-                        </div>
-                      ))}
+                      .filter(([, v]) => v != null && String(v ?? "").trim() !== "")
+                      .map(([k, v]) => {
+                        const display = Array.isArray(v)
+                          ? `[${v.length} items]`
+                          : typeof v === "object"
+                          ? JSON.stringify(v).slice(0, 80)
+                          : String(v);
+                        return (
+                          <div key={k} className="flex justify-between gap-3 border-b border-border/40 py-1 text-sm">
+                            <span className="text-muted-foreground">{k}</span>
+                            <span className="text-right font-medium">{display}</span>
+                          </div>
+                        );
+                      })}
                   </div>
                 </CardContent>
               </Card>

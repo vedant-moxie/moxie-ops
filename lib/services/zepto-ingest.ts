@@ -26,16 +26,23 @@ type PoStatus =
   | "PENDING_REVIEW" | "PRIORITISED" | "ALLOCATED" | "APPROVED" | "DISPATCHED"
   | "DELIVERED" | "GRN_RECEIVED" | "CLOSED" | "DISCREPANCY" | "ON_HOLD";
 
-function mapZeptoLiveStatus(status: string, grnQty: number, totalQty: number): PoStatus {
+// Status is driven primarily by per-SKU received quantity.
+// "PENDING_GRN" must NOT trigger GRN_RECEIVED — it means awaiting GRN, not yet received.
+// Only exact terminal status strings (COMPLETED, exact "grn_received") or actual received
+// qty > 0 should result in a received status.
+function mapZeptoLiveStatus(status: string, totalReceivedQty: number, totalQty: number): PoStatus {
   const s = status.toLowerCase();
   if (s.includes("cancel") || s.includes("expir") || s.includes("reject") || s.includes("closed_without")) return "ON_HOLD";
-  if (s.includes("delivered") || s.includes("grn") || s.includes("received")) {
-    if (grnQty >= totalQty && totalQty > 0) return "CLOSED";
+  // Primary: actual per-SKU received qty
+  if (totalReceivedQty > 0) {
+    if (totalReceivedQty >= totalQty && totalQty > 0) return "CLOSED";
     return "GRN_RECEIVED";
   }
   if (s.includes("dispatched") || s.includes("shipped")) return "DISPATCHED";
-  if (s.includes("approved") || s.includes("confirmed")) return "APPROVED";
-  if (grnQty > 0) return "GRN_RECEIVED";
+  if (s.includes("approved") || s.includes("confirmed") || s.includes("acknowledged")) return "APPROVED";
+  // Secondary: unambiguous terminal statuses — COMPLETED or the exact string "grn_received".
+  // Do NOT use s.includes("grn") which matches PENDING_GRN.
+  if (s.includes("complet") || s.includes("delivered") || s === "grn_received") return "GRN_RECEIVED";
   return "PENDING_REVIEW";
 }
 
@@ -117,12 +124,12 @@ export async function ingestLiveZeptoPOs(
     const poDate = zEpochOrIso(po.poDate ?? po.po_date ?? po.createdAt ?? po.created_at);
     const expiryDate = zEpochOrIso(po.expiryDate ?? po.expiry_date ?? po.deliveryDate ?? po.delivery_date);
     const totalQty = Math.max(0, Math.round(Number(po.totalQty ?? po.total_qty ?? po.poQty ?? po.quantity ?? po.totalQuantity ?? 0) || 0));
-    const grnQty = Math.max(0, Math.round(Number(po.grnQty ?? po.grn_qty ?? po.receivedQty ?? po.received_qty ?? 0) || 0));
     const totalValue = Number(po.poValue ?? po.totalValue ?? po.total_value ?? po.value ?? po.amount ?? 0) || null;
     const statusRaw = String(po.status ?? po.poStatus ?? po.state ?? "");
-    const status = mapZeptoLiveStatus(statusRaw, grnQty, totalQty);
 
-    type LineSpec = { code: string; name: string; qty: number; unitPrice: number | null; rawData: Prisma.InputJsonValue };
+    // Per-SKU received qty: grnQty field from the items endpoint.
+    // receivedQty on LineSpec is 0 when the API returns null (not yet GRN'd).
+    type LineSpec = { code: string; name: string; qty: number; receivedQty: number; unitPrice: number | null; rawData: Prisma.InputJsonValue };
     let lineSpecs: LineSpec[];
 
     const apiLines = extractZeptoLines(po);
@@ -135,22 +142,29 @@ export async function ingestLiveZeptoPOs(
           `ZEP-${poNo.replace(/[^A-Z0-9]/gi, "").slice(0, 12)}-L${i}`;
         const name = rawName || code;
         const qty = Math.max(0, Math.round(Number(line.quantity ?? line.qty ?? line.orderedQty ?? line.ordered_qty ?? line.poQty ?? line.po_qty ?? 0) || 0));
+        // grnQty is the confirmed per-SKU received quantity from the items endpoint.
+        const grnRaw = line.grnQty ?? line.grn_qty ?? line.receivedQty ?? line.received_qty ?? null;
+        const receivedQty = grnRaw != null ? Math.max(0, Math.round(Number(grnRaw) || 0)) : 0;
         const unitPrice = Number(line.unitPrice ?? line.unit_price ?? line.price ?? null) || null;
-        return { code, name, qty, unitPrice, rawData: line as Prisma.InputJsonValue };
+        return { code, name, qty, receivedQty, unitPrice, rawData: line as Prisma.InputJsonValue };
       });
     } else {
       const summaryCode = `ZEP-SUMM-${poNo.replace(/[^A-Z0-9]/gi, "").slice(0, 16)}`;
       const summaryName = `Zepto PO ${poNo}${totalQty > 0 ? ` (${totalQty} units)` : ""}`;
       const unitPrice = totalValue && totalQty > 0 ? Math.round((totalValue / totalQty) * 100) / 100 : null;
-      lineSpecs = [{ code: summaryCode, name: summaryName, qty: Math.max(1, totalQty), unitPrice, rawData: po as Prisma.InputJsonValue }];
+      lineSpecs = [{ code: summaryCode, name: summaryName, qty: Math.max(1, totalQty), receivedQty: 0, unitPrice, rawData: po as Prisma.InputJsonValue }];
       warnings.push(`PO ${poNo}: API returned no line items — 1 summary line created (qty=${totalQty}, value=${totalValue ?? "?"}).`);
     }
 
-    const resolvedLines: { skuId: string; channelSkuCode: string | null; requestedQty: number; unitPrice: number | null; rawData: Prisma.InputJsonValue }[] = [];
+    // Compute total received from per-SKU data (not the PO-level grnQty which can be stale).
+    const totalReceivedQty = lineSpecs.reduce((s, l) => s + l.receivedQty, 0);
+    const status = mapZeptoLiveStatus(statusRaw, totalReceivedQty, totalQty);
+
+    const resolvedLines: { skuId: string; channelSkuCode: string | null; requestedQty: number; receivedQty: number; unitPrice: number | null; rawData: Prisma.InputJsonValue }[] = [];
     for (const spec of lineSpecs) {
       const { id: skuId, created } = await resolveOrCreateZeptoSku(spec.code, spec.name, skuCache);
       if (created) skusCreated++;
-      resolvedLines.push({ skuId, channelSkuCode: spec.code, requestedQty: spec.qty, unitPrice: spec.unitPrice, rawData: spec.rawData });
+      resolvedLines.push({ skuId, channelSkuCode: spec.code, requestedQty: spec.qty, receivedQty: spec.receivedQty, unitPrice: spec.unitPrice, rawData: spec.rawData });
     }
 
     const externalId = `zepto:${poNo}`;
@@ -168,22 +182,32 @@ export async function ingestLiveZeptoPOs(
 
       await tx.poLineItem.deleteMany({ where: { poId: dbPo.id } });
       for (const line of resolvedLines) {
-        await tx.poLineItem.create({ data: { poId: dbPo.id, ...line } });
+        await tx.poLineItem.create({
+          data: {
+            poId: dbPo.id,
+            skuId: line.skuId,
+            channelSkuCode: line.channelSkuCode,
+            requestedQty: line.requestedQty,
+            unitPrice: line.unitPrice,
+            rawData: line.rawData,
+          },
+        });
       }
 
       await tx.discrepancy.deleteMany({ where: { poId: dbPo.id } });
       await tx.grnRecord.deleteMany({ where: { poId: dbPo.id } });
-      if (grnQty > 0 && resolvedLines.length > 0) {
-        const allReceived = grnQty >= totalQty && totalQty > 0;
+      const grnLines = resolvedLines.filter((l) => l.receivedQty > 0);
+      if (grnLines.length > 0) {
+        const allReceived = totalReceivedQty >= totalQty && totalQty > 0;
         await tx.grnRecord.create({
           data: {
             poId: dbPo.id, source: "PORTAL", channelGrnNumber: null,
             status: allReceived ? "ACCEPTED" : "PENDING_RECONCILIATION",
             receivedAt: expiryDate ?? poDate,
             lineItems: {
-              create: resolvedLines.map((l) => ({
+              create: grnLines.map((l) => ({
                 skuId: l.skuId,
-                receivedQty: Math.min(grnQty, l.requestedQty),
+                receivedQty: l.receivedQty,
                 rejectedQty: 0,
               })),
             },
@@ -194,7 +218,7 @@ export async function ingestLiveZeptoPOs(
       await writeAudit({
         tx, entityType: "PurchaseOrder", entityId: dbPo.id, action: "ZEPTO_IMPORTED",
         performedBy: actorLabel,
-        changes: { poNumber: poNo, lines: resolvedLines.length, totalValue, grnQty, status },
+        changes: { poNumber: poNo, lines: resolvedLines.length, totalValue, totalReceivedQty, status },
       });
     });
 
