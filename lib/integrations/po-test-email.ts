@@ -1,6 +1,7 @@
 import "server-only";
 import nodemailer from "nodemailer";
 import { env, requireEnv } from "@/lib/env";
+import { nextEmailRefNumber } from "@/lib/services/email-ref-counter";
 
 export interface PoPreparationEmailResult {
   messageId: string;
@@ -25,6 +26,8 @@ export interface PoEmailData {
   dispatchFrom: string;
   lines: PoEmailLine[];
   attachments?: EmailAttachment[];
+  /** If provided, overrides the default subject with `${PO_EMAIL_REF_PREFIX}${refNumber}`. */
+  refNumber?: number;
 }
 
 function buildHtml(d: PoEmailData): string {
@@ -85,6 +88,10 @@ export async function sendPoPreparationEmail(data: PoEmailData): Promise<PoPrepa
   const pass = env.PO_TEST_EMAIL_SMTP_PASS!.replace(/\s+/g, "");
   const to = env.PO_TEST_EMAIL_TO;
 
+  // Assign and persist the next reference number for this send
+  const refNum = data.refNumber ?? (await nextEmailRefNumber());
+  const subject = `${env.PO_EMAIL_REF_PREFIX}${refNum}`;
+
   const transport = nodemailer.createTransport({
     host: "smtp.gmail.com",
     port: 465,
@@ -95,7 +102,7 @@ export async function sendPoPreparationEmail(data: PoEmailData): Promise<PoPrepa
   const info = await transport.sendMail({
     from: `"Moxie Ops" <${user}>`,
     to,
-    subject: `Please prepare the mentioned PO - ${data.poNumber}`,
+    subject,
     html: buildHtml(data),
     text: buildText(data),
     attachments: data.attachments?.map((a) => ({

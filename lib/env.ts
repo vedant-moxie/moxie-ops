@@ -154,6 +154,10 @@ const schema = z.object({
   PO_TEST_EMAIL_SMTP_PASS: z.string().optional(), // Gmail app password (strip spaces)
   PO_TEST_EMAIL_TO: z.string().default("abhishek@moxiebeauty.in"),
 
+  // PO allocation email reference number (subject: `${PO_EMAIL_REF_PREFIX}${n}`)
+  PO_EMAIL_REF_PREFIX: z.string().default("MB - 26/27 - "),
+  PO_EMAIL_REF_START: z.coerce.number().int().positive().default(1457),
+
   // Company
   COMPANY_NAME: z.string().default("Moxie Beauty Pvt Ltd"),
   COMPANY_GSTIN: z.string().default("29ABCDE1234F1Z5"),

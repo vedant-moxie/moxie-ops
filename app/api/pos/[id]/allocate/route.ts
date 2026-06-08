@@ -8,6 +8,7 @@ import { sendPoPreparationEmail } from "@/lib/integrations/po-test-email";
 import type { EmailAttachment } from "@/lib/integrations/po-test-email";
 import { getPoDocuments, extractGstinFromPdf } from "@/lib/services/po-documents";
 import { resolveDispatchFromGstins } from "@/lib/services/po-documents-helpers";
+import { resolveInternalSku } from "@/lib/services/sku-resolver";
 
 export const dynamic = "force-dynamic";
 
@@ -163,7 +164,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
                   : (l.approvedQty ?? 0) > 0
                     ? l.approvedQty!
                     : l.requestedQty;
-              return { sku: l.channelSkuCode ?? l.sku.internalCode, qty };
+              // Resolve channel code to internal SKU; fall back to channel code if unmapped
+              const channelCode = l.channelSkuCode ?? l.sku.internalCode;
+              const sku = l.channelSkuCode
+                ? resolveInternalSku(po.source, l.channelSkuCode)
+                : channelCode;
+              return { sku, qty };
             })
             .filter((l) => l.qty > 0),
           attachments,
