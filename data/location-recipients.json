@@ -1,0 +1,63 @@
+{
+  "RGL NCR": {
+    "to": [
+      {"name": "Amritya Khajuria", "email": "amritya@moxiebeauty.in"},
+      {"name": "Abhishek Singh", "email": "abhishek@moxiebeauty.in"},
+      {"name": "Rishabh Kumar", "email": "rishabh@moxiebeauty.in"},
+      {"name": "Aman Ojha", "email": "Ops.del.moxie@myrgl.com"},
+      {"name": "Manish Sharma", "email": "manish@moxiebeauty.in"}
+    ],
+    "cc": [
+      {"name": "Shantam Tandon", "email": "shantam@moxiebeauty.in"},
+      {"name": "Dimpy Mahajan", "email": "dimpy@moxiebeauty.in"},
+      {"name": "Naveen Yadav", "email": "naveen.yadav@moxiebeauty.in"},
+      {"name": "Rani Rai", "email": "rani@moxiebeauty.in"},
+      {"name": "Jagdeep Kaur", "email": "jagdeep@moxiebeauty.in"},
+      {"name": "Tanuja Juyal", "email": "tanuja@moxiebeauty.in"},
+      {"name": "Navneet Yadav", "email": "navneet@moxiebeauty.in"},
+      {"name": "Ashish Chaturvedi", "email": "ashish@moxiebeauty.in"},
+      {"name": "Adesh", "email": "adesh.yadav@myrgl.com"}
+    ]
+  },
+  "RGL BLR": {
+    "to": [
+      {"name": "Abhishek Singh", "email": "abhishek@moxiebeauty.in"},
+      {"name": "Amritya Khajuria", "email": "amritya@moxiebeauty.in"},
+      {"name": "Rishabh Kumar", "email": "rishabh@moxiebeauty.in"},
+      {"name": "Manish Sharma", "email": "manish@moxiebeauty.in"},
+      {"name": "Lokesh Gaurav", "email": "blr.ops.moxie@myrgl.com"}
+    ],
+    "cc": [
+      {"name": "Shantam Tandon", "email": "shantam@moxiebeauty.in"},
+      {"name": "Dimpy Mahajan", "email": "dimpy@moxiebeauty.in"},
+      {"name": "Rathina Kumar", "email": "rathinakumar.m@myrgl.com"},
+      {"name": "David John", "email": "david.john@myrgl.com"},
+      {"name": "Tanuja Juyal", "email": "tanuja@moxiebeauty.in"},
+      {"name": "Navneet Yadav", "email": "navneet@moxiebeauty.in"},
+      {"name": "Ashish Chaturvedi", "email": "ashish@moxiebeauty.in"},
+      {"name": "Naveen Yadav", "email": "naveen.yadav@moxiebeauty.in"},
+      {"name": "Rani Rai", "email": "rani@moxiebeauty.in"},
+      {"name": "Jagdeep Kaur", "email": "jagdeep@moxiebeauty.in"}
+    ]
+  },
+  "RGL MUM": {
+    "to": [
+      {"name": "Abhishek Singh", "email": "abhishek@moxiebeauty.in"},
+      {"name": "Amritya Khajuria", "email": "amritya@moxiebeauty.in"},
+      {"name": "Rishabh Kumar", "email": "rishabh@moxiebeauty.in"},
+      {"name": "Mumbai WH", "email": "bhi.ops.mox@myrgl.com"},
+      {"name": "Manish Sharma", "email": "manish@moxiebeauty.in"}
+    ],
+    "cc": [
+      {"name": "Shantam Tandon", "email": "shantam@moxiebeauty.in"},
+      {"name": "Nitin Mharase", "email": "nitin.mharase@myrgl.com"},
+      {"name": "Dimpy Mahajan", "email": "dimpy@moxiebeauty.in"},
+      {"name": "Naveen Yadav", "email": "naveen.yadav@moxiebeauty.in"},
+      {"name": "Rani Rai", "email": "rani@moxiebeauty.in"},
+      {"name": "Jagdeep Kaur", "email": "jagdeep@moxiebeauty.in"},
+      {"name": "Tanuja Juyal", "email": "tanuja@moxiebeauty.in"},
+      {"name": "Navneet Yadav", "email": "navneet@moxiebeauty.in"},
+      {"name": "Ashish Chaturvedi", "email": "ashish@moxiebeauty.in"}
+    ]
+  }
+}

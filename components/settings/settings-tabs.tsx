@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Pencil, Loader2, Plug, RefreshCw, Mail } from "lucide-react";
+import { Pencil, Loader2, Plug, RefreshCw, Mail, Plus, X } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -46,18 +46,32 @@ interface Sku {
   casePackSize: number;
 }
 
+interface RecipientEntry {
+  name: string;
+  email: string;
+}
+interface LocationConfig {
+  to: RecipientEntry[];
+  cc: RecipientEntry[];
+}
+type LocationRecipientsMap = Record<string, LocationConfig>;
+
+const DISPATCH_LOCATIONS = ["RGL NCR", "RGL BLR", "RGL MUM"];
+
 export function SettingsTabs({
   channels,
   skus,
   warehouseEmail,
   spreadsheetId,
   emailRecipients,
+  locationRecipients,
 }: {
   channels: Channel[];
   skus: Sku[];
   warehouseEmail: string;
   spreadsheetId: string;
   emailRecipients: { to: string[]; cc: string[] };
+  locationRecipients: LocationRecipientsMap;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState<Channel | null>(null);
@@ -247,8 +261,15 @@ Reference ID: {warehouseInstructionId}`}
       </TabsContent>
 
       {/* Email recipients */}
-      <TabsContent value="email">
+      <TabsContent value="email" className="space-y-6">
         <EmailRecipientsCard initialTo={emailRecipients.to} initialCc={emailRecipients.cc} />
+        {DISPATCH_LOCATIONS.map((loc) => (
+          <LocationRecipientsCard
+            key={loc}
+            location={loc}
+            initial={locationRecipients[loc] ?? { to: [], cc: [] }}
+          />
+        ))}
       </TabsContent>
 
       {/* Edit channel dialog */}
@@ -348,6 +369,143 @@ function EmailRecipientsCard({
         <Button onClick={save} disabled={saving}>
           {saving && <Loader2 className="h-4 w-4 animate-spin" />}
           Save recipients
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function RecipientRowsEditor({
+  label,
+  hint,
+  rows,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  rows: RecipientEntry[];
+  onChange: (rows: RecipientEntry[]) => void;
+}) {
+  return (
+    <div className="grid gap-2">
+      <Label>{label}</Label>
+      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+      {rows.length === 0 && (
+        <p className="text-xs italic text-muted-foreground">No recipients yet.</p>
+      )}
+      {rows.map((r, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <Input
+            value={r.name}
+            placeholder="Name"
+            className="flex-1"
+            onChange={(e) =>
+              onChange(rows.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
+            }
+          />
+          <Input
+            value={r.email}
+            placeholder="email@moxiebeauty.in"
+            className="flex-[1.5]"
+            onChange={(e) =>
+              onChange(rows.map((x, j) => (j === i ? { ...x, email: e.target.value } : x)))
+            }
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="shrink-0 text-muted-foreground hover:text-destructive"
+            onClick={() => onChange(rows.filter((_, j) => j !== i))}
+            aria-label="Remove recipient"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      ))}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="w-fit"
+        onClick={() => onChange([...rows, { name: "", email: "" }])}
+      >
+        <Plus className="h-3.5 w-3.5 mr-1" />
+        Add recipient
+      </Button>
+    </div>
+  );
+}
+
+function LocationRecipientsCard({
+  location,
+  initial,
+}: {
+  location: string;
+  initial: LocationConfig;
+}) {
+  const router = useRouter();
+  const [to, setTo] = useState<RecipientEntry[]>(initial.to ?? []);
+  const [cc, setCc] = useState<RecipientEntry[]>(initial.cc ?? []);
+  const [saving, setSaving] = useState(false);
+
+  function clean(rows: RecipientEntry[]): RecipientEntry[] {
+    return rows
+      .map((r) => ({ name: r.name.trim(), email: r.email.trim() }))
+      .filter((r) => r.name || r.email);
+  }
+
+  async function save() {
+    const cleanTo = clean(to);
+    const cleanCc = clean(cc);
+    if (cleanTo.length === 0) {
+      toast.error("At least one To recipient is required.");
+      return;
+    }
+    const invalid = [...cleanTo, ...cleanCc].filter((r) => !EMAIL_RE.test(r.email));
+    if (invalid.length) {
+      toast.error(`Invalid email(s): ${invalid.map((r) => r.email || "(blank)").join(", ")}`);
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(
+        `/api/settings/email-recipients?location=${encodeURIComponent(location)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ to: cleanTo, cc: cleanCc }),
+        },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? "Save failed");
+      }
+      toast.success(`${location} recipients saved`);
+      router.refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{location} — dispatch recipients</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-5 sm:max-w-2xl">
+        <RecipientRowsEditor
+          label="Send to"
+          hint="Used when a PO's dispatch location resolves to this warehouse."
+          rows={to}
+          onChange={setTo}
+        />
+        <RecipientRowsEditor label="CC" rows={cc} onChange={setCc} />
+        <Button onClick={save} disabled={saving}>
+          {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+          Save {location} recipients
         </Button>
       </CardContent>
     </Card>

@@ -6,6 +6,7 @@ import type { EmailAttachment } from "@/lib/integrations/po-test-email";
 import { getPoDocuments, extractGstinFromPdf } from "@/lib/services/po-documents";
 import { resolveDispatchFromGstins } from "@/lib/services/po-documents-helpers";
 import { resolveInternalSku } from "@/lib/services/sku-resolver";
+import { getLocationRecipients } from "@/lib/services/app-settings";
 
 const FACILITY_KEYS = [
   "facilityname", "facility_name", "facility", "warehouse",
@@ -153,11 +154,31 @@ export async function allocateAndEmailPo(
         console.warn("[allocate-and-email] getPoDocuments failed:", err);
       }
 
+      // Per-dispatch-location recipients; fall back to the global list (handled
+      // inside sendPoPreparationEmail) when the location is unknown/unmapped.
+      let toOverride: string[] | undefined;
+      let ccOverride: string[] | undefined;
+      if (dispatchFrom && dispatchFrom !== "—") {
+        const locRecipients = await getLocationRecipients(dispatchFrom);
+        if (locRecipients) {
+          toOverride = locRecipients.to;
+          ccOverride = locRecipients.cc;
+          console.info(`[allocate-and-email] using ${dispatchFrom} recipients:`, {
+            to: toOverride,
+            cc: ccOverride,
+          });
+        } else {
+          console.info(`[allocate-and-email] no recipients for "${dispatchFrom}", using global fallback`);
+        }
+      }
+
       const result = await sendPoPreparationEmail({
         poNumber: po.channelPoNumber ?? poId,
         channel: po.channel.name,
         location,
         dispatchFrom,
+        to: toOverride,
+        cc: ccOverride,
         lines: po.lineItems
           .map((l) => {
             const qty: number =

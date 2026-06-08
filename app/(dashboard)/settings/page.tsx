@@ -1,16 +1,17 @@
 import { Topbar } from "@/components/layout/topbar";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
 import { getChannels, getSkus } from "@/lib/data/queries";
-import { getPoEmailRecipients } from "@/lib/services/app-settings";
+import { getPoEmailRecipients, getLocationRecipientsMap } from "@/lib/services/app-settings";
 import { env } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const [channels, skus, emailRecipients] = await Promise.all([
+  const [channels, skus, emailRecipients, locationRecipients] = await Promise.all([
     getChannels(),
     getSkus(),
     getPoEmailRecipients(),
+    getLocationRecipientsMap(),
   ]);
   return (
     <>
@@ -22,6 +23,7 @@ export default async function SettingsPage() {
           warehouseEmail={env.WAREHOUSE_EMAIL}
           spreadsheetId={env.INVENTORY_SPREADSHEET_ID ?? ""}
           emailRecipients={emailRecipients}
+          locationRecipients={locationRecipients}
         />
       </main>
     </>
