@@ -9,12 +9,17 @@ import type { PoStatus } from "@prisma/client";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SelectItem } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ChannelChip } from "@/components/shared/channel-chip";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
+import { SelectFilter, useDebounced } from "@/components/shared/table-filters";
+import { PO_STATUS_META, PO_STATUS_ORDER } from "@/lib/status";
+import { CHANNELS } from "@/lib/channels";
 import { cn, formatINR, formatNumber, formatDate } from "@/lib/utils";
 
 export interface AllocRow {
@@ -35,20 +40,40 @@ export interface AllocRow {
 export function AllocationList({ rows }: { rows: AllocRow[] }) {
   const router = useRouter();
   const [q, setQ] = useState("");
+  const [channelSlug, setChannelSlug] = useState("all");
+  const [status, setStatus] = useState("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<string[] | null>(null);
 
+  const debouncedQ = useDebounced(q);
+
+  const filtersActive = q !== "" || channelSlug !== "all" || status !== "all";
+
+  function clearFilters() {
+    setQ("");
+    setChannelSlug("all");
+    setStatus("all");
+  }
+
+  const statusOptions = useMemo(() => {
+    const present = new Set(rows.map((r) => r.status));
+    return PO_STATUS_ORDER.filter((s) => present.has(s));
+  }, [rows]);
+
   const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    if (!s) return rows;
+    const s = debouncedQ.trim().toLowerCase();
+    const selectedChannel = CHANNELS.find((c) => c.slug === channelSlug);
     return rows.filter(
       (r) =>
-        (r.channelPoNumber ?? "").toLowerCase().includes(s) ||
-        (r.facility ?? "").toLowerCase().includes(s),
+        (s === "" ||
+          (r.channelPoNumber ?? "").toLowerCase().includes(s) ||
+          (r.facility ?? "").toLowerCase().includes(s)) &&
+        (channelSlug === "all" || r.channel.name === selectedChannel?.name) &&
+        (status === "all" || r.status === status),
     );
-  }, [rows, q]);
+  }, [rows, debouncedQ, channelSlug, status]);
 
   const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
 
@@ -142,13 +167,35 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
 
   return (
     <div>
-      <div className="px-5 pb-3 pt-1 flex items-center gap-3">
+      <div className="px-5 pb-3 pt-1 flex flex-wrap items-center gap-2">
         <Input
           placeholder="Search PO number or facility…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          className="h-9 max-w-xs"
+          className="h-9 w-[240px]"
         />
+        <SelectFilter value={channelSlug} onChange={setChannelSlug} allLabel="All channels" width="w-[180px]">
+          {CHANNELS.map((c) => (
+            <SelectItem key={c.slug} value={c.slug}>
+              <ChannelChip name={c.name} color={c.logoColor} />
+            </SelectItem>
+          ))}
+        </SelectFilter>
+        <SelectFilter value={status} onChange={setStatus} allLabel="All statuses">
+          {statusOptions.map((s) => (
+            <SelectItem key={s} value={s}>{PO_STATUS_META[s].label}</SelectItem>
+          ))}
+        </SelectFilter>
+        {filtersActive && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={clearFilters}
+            className="h-9 gap-1 text-muted-foreground"
+          >
+            <X className="h-3.5 w-3.5" /> Clear filters
+          </Button>
+        )}
         {selectedCount > 0 && (
           <Button
             onClick={requestBulkSend}
@@ -161,6 +208,11 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
               : `Allocate full & send (${selectedCount})`}
           </Button>
         )}
+        <span className="ml-auto text-sm text-muted-foreground">
+          {filtered.length === rows.length
+            ? `${rows.length} PO${rows.length === 1 ? "" : "s"}`
+            : `showing ${filtered.length} of ${rows.length} POs`}
+        </span>
       </div>
 
       <Table>

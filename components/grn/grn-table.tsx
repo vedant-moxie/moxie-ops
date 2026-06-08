@@ -1,15 +1,22 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Mail, Globe, FileSpreadsheet, CheckCircle2, ExternalLink } from "lucide-react";
 import type { GrnSource, GrnStatus } from "@prisma/client";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { SelectItem } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { ChannelChip } from "@/components/shared/channel-chip";
 import { EmptyState } from "@/components/shared/empty-state";
+import {
+  FilterBar, FilterGroup, SearchFilter, SelectFilter,
+  DateRangeFilter, useDebounced, inDateRange,
+} from "@/components/shared/table-filters";
 import { GRN_STATUS_META } from "@/lib/status";
+import { CHANNELS } from "@/lib/channels";
 import { formatINR, formatDate } from "@/lib/utils";
 
 const SOURCE_META: Record<GrnSource, { label: string; icon: typeof Mail }> = {
@@ -51,6 +58,47 @@ function MatchBadge({ isPerfect, fillRatePct, variances }: Pick<GrnRow, "isPerfe
 }
 
 export function GrnTable({ grns }: { grns: GrnRow[] }) {
+  const [channelSlug, setChannelSlug] = useState("all");
+  const [source, setSource] = useState("all");
+  const [status, setStatus] = useState("all");
+  const [match, setMatch] = useState("all");
+  const [search, setSearch] = useState("");
+  const [receivedFrom, setReceivedFrom] = useState("");
+  const [receivedTo, setReceivedTo] = useState("");
+
+  const debouncedSearch = useDebounced(search);
+
+  const active =
+    channelSlug !== "all" || source !== "all" || status !== "all" ||
+    match !== "all" || search !== "" || receivedFrom !== "" || receivedTo !== "";
+
+  function clearFilters() {
+    setChannelSlug("all");
+    setSource("all");
+    setStatus("all");
+    setMatch("all");
+    setSearch("");
+    setReceivedFrom("");
+    setReceivedTo("");
+  }
+
+  const filtered = useMemo(() => {
+    const selectedChannel = CHANNELS.find((c) => c.slug === channelSlug);
+    const q = debouncedSearch.trim().toLowerCase();
+    return grns.filter(
+      (g) =>
+        (channelSlug === "all" || g.po.channel.name === selectedChannel?.name) &&
+        (source === "all" || g.source === source) &&
+        (status === "all" || g.status === status) &&
+        (match === "all" ||
+          (match === "perfect" ? g.isPerfect : !g.isPerfect)) &&
+        (q === "" ||
+          (g.channelGrnNumber ?? "").toLowerCase().includes(q) ||
+          (g.po.channelPoNumber ?? "").toLowerCase().includes(q)) &&
+        inDateRange(g.receivedAt, receivedFrom, receivedTo),
+    );
+  }, [grns, channelSlug, source, status, match, debouncedSearch, receivedFrom, receivedTo]);
+
   if (grns.length === 0) {
     return (
       <EmptyState
@@ -61,6 +109,50 @@ export function GrnTable({ grns }: { grns: GrnRow[] }) {
     );
   }
   return (
+    <div>
+      <FilterBar
+        active={active}
+        onClear={clearFilters}
+        count={filtered.length}
+        total={grns.length}
+        noun="GRNs"
+      >
+        <SelectFilter value={channelSlug} onChange={setChannelSlug} allLabel="All channels" width="w-[180px]">
+          {CHANNELS.map((c) => (
+            <SelectItem key={c.slug} value={c.slug}>
+              <ChannelChip name={c.name} color={c.logoColor} />
+            </SelectItem>
+          ))}
+        </SelectFilter>
+        <SelectFilter value={source} onChange={setSource} allLabel="All sources" width="w-[150px]">
+          {(Object.entries(SOURCE_META) as [GrnSource, (typeof SOURCE_META)[GrnSource]][]).map(
+            ([k, v]) => (
+              <SelectItem key={k} value={k}>{v.label}</SelectItem>
+            ),
+          )}
+        </SelectFilter>
+        <SelectFilter value={status} onChange={setStatus} allLabel="All statuses">
+          {Object.entries(GRN_STATUS_META).map(([k, v]) => (
+            <SelectItem key={k} value={k}>{v.label}</SelectItem>
+          ))}
+        </SelectFilter>
+        <SelectFilter value={match} onChange={setMatch} allLabel="All matches" width="w-[170px]">
+          <SelectItem value="perfect">Perfect</SelectItem>
+          <SelectItem value="discrepancy">Has discrepancy</SelectItem>
+        </SelectFilter>
+        <SearchFilter value={search} onChange={setSearch} placeholder="GRN or PO number…" />
+        <FilterGroup label="Received">
+          <DateRangeFilter from={receivedFrom} to={receivedTo} onFrom={setReceivedFrom} onTo={setReceivedTo} />
+        </FilterGroup>
+      </FilterBar>
+
+      {filtered.length === 0 ? (
+        <EmptyState
+          icon={CheckCircle2}
+          title="No GRNs match your filters"
+          description="Adjust or clear the filters to see more results."
+        />
+      ) : (
     <Table>
       <TableHeader>
         <TableRow className="hover:bg-transparent">
@@ -76,7 +168,7 @@ export function GrnTable({ grns }: { grns: GrnRow[] }) {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {grns.map((grn) => {
+        {filtered.map((grn) => {
           const Src = SOURCE_META[grn.source];
           const meta = GRN_STATUS_META[grn.status];
           return (
@@ -126,5 +218,7 @@ export function GrnTable({ grns }: { grns: GrnRow[] }) {
         })}
       </TableBody>
     </Table>
+      )}
+    </div>
   );
 }
