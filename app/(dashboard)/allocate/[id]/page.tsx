@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { AlertTriangle, ArrowLeft } from "lucide-react";
 import { Topbar } from "@/components/layout/topbar";
 import { Card, CardContent } from "@/components/ui/card";
 import { ChannelChip } from "@/components/shared/channel-chip";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { PoAllocator } from "@/components/allocation/po-allocator";
 import { getPoForAllocation } from "@/lib/data/queries";
+import { validatePoTaxables } from "@/lib/services/taxable-validation";
 import { formatINR, formatDate } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -18,6 +19,9 @@ export default async function AllocatePoPage({ params }: { params: { id: string 
   const receivedBySku: Record<string, number> = {};
   for (const l of po.grnRecord?.lineItems ?? []) receivedBySku[l.skuId] = l.receivedQty;
 
+  const taxValidation = validatePoTaxables(po);
+  const mismatchLines = taxValidation.lines.filter((l) => l.mismatch);
+
   return (
     <>
       <Topbar title={`Allocate · ${po.channelPoNumber ?? "PO"}`} subtitle={po.channel.name} />
@@ -25,6 +29,23 @@ export default async function AllocatePoPage({ params }: { params: { id: string 
         <Link href="/allocate" className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
           <ArrowLeft className="h-4 w-4" /> Back to allocation
         </Link>
+
+        {taxValidation.hasTaxableMismatch && (
+          <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-950/30">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div className="text-sm">
+              <span className="font-semibold text-amber-800 dark:text-amber-300">Taxable value mismatch — review before sending</span>
+              <ul className="mt-1 space-y-0.5 text-amber-700 dark:text-amber-400">
+                {mismatchLines.map((l) => (
+                  <li key={l.lineId}>
+                    <span className="font-mono">{l.channelSkuCode ?? l.sku}</span>
+                    {" — "}{l.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
 
         <Card className="mb-6">
           <CardContent className="flex flex-wrap items-center gap-x-8 gap-y-4 p-5">
@@ -41,6 +62,7 @@ export default async function AllocatePoPage({ params }: { params: { id: string 
           poId={po.id}
           lines={po.lineItems.map((l) => ({ ...l, rawData: (l.rawData as Record<string, string> | null) }))}
           receivedBySku={receivedBySku}
+          hasTaxableMismatch={taxValidation.hasTaxableMismatch}
         />
       </main>
     </>

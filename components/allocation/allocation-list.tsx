@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowRight, ClipboardCheck, SendHorizonal } from "lucide-react";
+import { AlertTriangle, ArrowRight, ClipboardCheck, SendHorizonal } from "lucide-react";
 import type { PoStatus } from "@prisma/client";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -28,6 +28,8 @@ export interface AllocRow {
   skuCount: number;
   orderedUnits: number;
   allocatedUnits: number;
+  hasTaxableMismatch: boolean;
+  taxMismatchCount: number;
 }
 
 export function AllocationList({ rows }: { rows: AllocRow[] }) {
@@ -36,6 +38,7 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<string[] | null>(null);
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -46,6 +49,8 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
         (r.facility ?? "").toLowerCase().includes(s),
     );
   }, [rows, q]);
+
+  const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
 
   const allFilteredSelected =
     filtered.length > 0 && filtered.every((r) => selected.has(r.id));
@@ -76,10 +81,19 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
     });
   }
 
-  async function bulkSend() {
+  function requestBulkSend() {
     const poIds = Array.from(selected);
     if (poIds.length === 0) return;
+    const mismatched = poIds.filter((id) => rowById.get(id)?.hasTaxableMismatch);
+    if (mismatched.length > 0) {
+      setPendingConfirm(poIds);
+    } else {
+      void executeBulkSend(poIds);
+    }
+  }
 
+  async function executeBulkSend(poIds: string[]) {
+    setPendingConfirm(null);
     setSending(true);
     setProgress({ done: 0, total: poIds.length });
 
@@ -137,7 +151,7 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
         />
         {selectedCount > 0 && (
           <Button
-            onClick={bulkSend}
+            onClick={requestBulkSend}
             disabled={sending}
             className="gap-2 shrink-0"
           >
@@ -179,7 +193,7 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
         </TableHeader>
         <TableBody>
           {filtered.map((r) => {
-            const progress = r.orderedUnits > 0 ? (r.allocatedUnits / r.orderedUnits) * 100 : 0;
+            const prog = r.orderedUnits > 0 ? (r.allocatedUnits / r.orderedUnits) * 100 : 0;
             const isSelected = selected.has(r.id);
             return (
               <TableRow key={r.id} className={cn("group", isSelected && "bg-muted/40")}>
@@ -191,7 +205,20 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
                   />
                 </TableCell>
                 <TableCell><ChannelChip name={r.channel.name} color={r.channel.logoColor} /></TableCell>
-                <TableCell className="font-medium">{r.channelPoNumber}</TableCell>
+                <TableCell className="font-medium">
+                  <div className="flex items-center gap-1.5">
+                    {r.channelPoNumber}
+                    {r.hasTaxableMismatch && (
+                      <span
+                        className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+                        title={`${r.taxMismatchCount} line${r.taxMismatchCount !== 1 ? "s" : ""} have taxable value mismatch vs SKU master`}
+                      >
+                        <AlertTriangle className="h-2.5 w-2.5" />
+                        Price
+                      </span>
+                    )}
+                  </div>
+                </TableCell>
                 <TableCell className="max-w-[200px] truncate text-muted-foreground">{r.facility ?? "—"}</TableCell>
                 <TableCell className="text-muted-foreground">{formatDate(r.poDate)}</TableCell>
                 <TableCell className="text-right nums">{r.skuCount}</TableCell>
@@ -201,7 +228,7 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
                     {formatNumber(r.allocatedUnits)}
                   </span>
                   {r.allocatedUnits > 0 && (
-                    <span className="ml-1 text-[11px] text-muted-foreground">({Math.round(progress)}%)</span>
+                    <span className="ml-1 text-[11px] text-muted-foreground">({Math.round(prog)}%)</span>
                   )}
                 </TableCell>
                 <TableCell><StatusBadge status={r.status} /></TableCell>
@@ -225,7 +252,7 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
             {selectedCount} PO{selectedCount !== 1 ? "s" : ""} selected
           </span>
           <Button
-            onClick={bulkSend}
+            onClick={requestBulkSend}
             disabled={sending}
             className="gap-2 rounded-full"
           >
@@ -243,6 +270,71 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
           </button>
         </div>
       )}
+
+      {/* Taxable mismatch confirmation dialog */}
+      {pendingConfirm && (
+        <MismatchConfirmDialog
+          poIds={pendingConfirm}
+          rowById={rowById}
+          onConfirm={() => executeBulkSend(pendingConfirm)}
+          onCancel={() => setPendingConfirm(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function MismatchConfirmDialog({
+  poIds,
+  rowById,
+  onConfirm,
+  onCancel,
+}: {
+  poIds: string[];
+  rowById: Map<string, AllocRow>;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const mismatchedRows = poIds
+    .map((id) => rowById.get(id))
+    .filter((r): r is AllocRow => r?.hasTaxableMismatch === true);
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-lg rounded-xl border border-border bg-card shadow-2xl">
+        <div className="border-b border-border px-5 py-4">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-amber-500" />
+            <h2 className="text-base font-semibold">Taxable value mismatch detected</h2>
+          </div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {mismatchedRows.length} of the {poIds.length} selected PO{poIds.length !== 1 ? "s" : ""} have line items
+            where the channel-reported taxable value differs from the SKU master. Review before sending.
+          </p>
+        </div>
+        <div className="max-h-64 overflow-y-auto px-5 py-3 space-y-2">
+          {mismatchedRows.map((r) => (
+            <div key={r.id} className="flex items-center justify-between text-sm rounded-md border border-amber-200 bg-amber-50/60 dark:border-amber-800 dark:bg-amber-950/20 px-3 py-2">
+              <div>
+                <span className="font-medium">{r.channelPoNumber ?? r.id}</span>
+                <span className="ml-2 text-muted-foreground">{r.channel.name}</span>
+              </div>
+              <span className="text-amber-700 dark:text-amber-400 text-xs font-medium">
+                {r.taxMismatchCount} line{r.taxMismatchCount !== 1 ? "s" : ""} differ
+              </span>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center justify-end gap-3 border-t border-border px-5 py-4">
+          <Button variant="outline" onClick={onCancel}>
+            Cancel — go back
+          </Button>
+          <Button onClick={onConfirm} className="gap-2 bg-amber-600 hover:bg-amber-700 text-white border-0">
+            <SendHorizonal className="h-4 w-4" />
+            Send anyway ({poIds.length} PO{poIds.length !== 1 ? "s" : ""})
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Truck, Mail, FileText, PackageCheck } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Truck, Mail, FileText, PackageCheck } from "lucide-react";
 import { Topbar } from "@/components/layout/topbar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { prisma } from "@/lib/db";
+import { validatePoTaxables } from "@/lib/services/taxable-validation";
 import { cn, formatINR, formatDate, formatDateTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -33,6 +34,9 @@ export default async function OrderDetailPage({ params }: { params: { id: string
     },
   });
   if (!po) notFound();
+
+  const taxValidation = validatePoTaxables(po);
+  const taxByLine = new Map(taxValidation.lines.map((l) => [l.lineId, l]));
 
   const dispatchedBySku = new Map(po.dispatchRecord?.lineItems.map((l) => [l.skuId, l.dispatchedQty]) ?? []);
   const receivedBySku = new Map(po.grnRecord?.lineItems.map((l) => [l.skuId, l.receivedQty]) ?? []);
@@ -80,6 +84,20 @@ export default async function OrderDetailPage({ params }: { params: { id: string
         >
           <ArrowLeft className="h-4 w-4" /> Back to orders
         </Link>
+
+        {/* Taxable mismatch banner */}
+        {taxValidation.hasTaxableMismatch && (
+          <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-950/30">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div className="text-sm">
+              <span className="font-semibold text-amber-800 dark:text-amber-300">Taxable value mismatch</span>
+              <span className="ml-1.5 text-amber-700 dark:text-amber-400">
+                {taxValidation.lines.filter((l) => l.mismatch).length} line{taxValidation.lines.filter((l) => l.mismatch).length !== 1 ? "s" : ""} differ from SKU master expected prices.
+                Review before sending the allocation email.
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Header card */}
         <Card className="mb-6">
@@ -133,6 +151,7 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                       <TableHead className="text-right">Received (GRN)</TableHead>
                       <TableHead className="text-right">Allocated</TableHead>
                       <TableHead className="text-right">Fill</TableHead>
+                      <TableHead className="text-right">Taxable/unit</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -147,8 +166,9 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                           : fillPct >= 100 ? "text-success"
                           : fillPct > 0 ? "text-warning"
                           : "text-danger";
+                      const tv = taxByLine.get(li.id);
                       return (
-                        <TableRow key={li.id}>
+                        <TableRow key={li.id} className={tv?.mismatch ? "bg-amber-50/50 dark:bg-amber-950/10" : undefined}>
                           <TableCell className="font-mono text-xs">{li.channelSkuCode ?? li.sku.internalCode}</TableCell>
                           <TableCell className="font-mono text-xs text-muted-foreground">{raw.upc ?? "—"}</TableCell>
                           <TableCell className="max-w-[280px]">
@@ -162,6 +182,21 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                           <TableCell className="text-right nums">{li.approvedQty ?? "—"}</TableCell>
                           <TableCell className={cn("text-right nums font-medium", tone)}>
                             {fillPct != null ? `${Math.round(fillPct)}%` : "—"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {tv?.mismatch ? (
+                              <span
+                                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                                title={tv.reason}
+                              >
+                                <AlertTriangle className="h-3 w-3" />
+                                ₹{tv.actual?.toFixed(2) ?? "?"} / exp ₹{tv.expected?.toFixed(2) ?? "?"}
+                              </span>
+                            ) : tv?.actual != null ? (
+                              <span className="nums text-sm text-muted-foreground">₹{tv.actual.toFixed(2)}</span>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
                           </TableCell>
                         </TableRow>
                       );

@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { validatePoTaxables } from "@/lib/services/taxable-validation";
 
 const DAY = 86_400_000;
 
@@ -110,13 +111,24 @@ export async function getAllocationList() {
       totalRequestedValue: true,
       rawData: true,
       channel: { select: { name: true, logoColor: true } },
-      lineItems: { select: { requestedQty: true, approvedQty: true } },
+      lineItems: {
+        select: {
+          id: true,
+          requestedQty: true,
+          approvedQty: true,
+          channelSkuCode: true,
+          unitPrice: true,
+          rawData: true,
+          sku: { select: { internalCode: true } },
+        },
+      },
     },
   });
   return pos.map((p) => {
     const ordered = p.lineItems.reduce((s, l) => s + l.requestedQty, 0);
     const allocated = p.lineItems.reduce((s, l) => s + (l.approvedQty ?? 0), 0);
     const raw = (p.rawData as Record<string, string> | null) ?? {};
+    const taxResult = validatePoTaxables(p);
     return {
       id: p.id,
       channelPoNumber: p.channelPoNumber,
@@ -128,6 +140,8 @@ export async function getAllocationList() {
       skuCount: p.lineItems.length,
       orderedUnits: ordered,
       allocatedUnits: allocated,
+      hasTaxableMismatch: taxResult.hasTaxableMismatch,
+      taxMismatchCount: taxResult.lines.filter((l) => l.mismatch).length,
     };
   });
 }

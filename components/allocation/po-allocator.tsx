@@ -3,9 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Check, Loader2, Wand2, PackageCheck, Mail } from "lucide-react";
+import { AlertTriangle, Loader2, Wand2, PackageCheck, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -25,16 +24,19 @@ export function PoAllocator({
   poId,
   lines,
   receivedBySku,
+  hasTaxableMismatch = false,
 }: {
   poId: string;
   lines: Line[];
   receivedBySku: Record<string, number>;
+  hasTaxableMismatch?: boolean;
 }) {
   const router = useRouter();
   const [alloc, setAlloc] = useState<Record<string, number>>(() =>
     Object.fromEntries(lines.map((l) => [l.skuId, l.approvedQty ?? l.requestedQty ?? 0])),
   );
   const [saving, setSaving] = useState(false);
+  const [confirmSend, setConfirmSend] = useState(false);
 
   const set = (skuId: string, raw: string) =>
     setAlloc((p) => ({ ...p, [skuId]: Math.max(0, Math.floor(Number(raw) || 0)) }));
@@ -134,9 +136,13 @@ export function PoAllocator({
 
       <div className="flex justify-end gap-2">
         <Button variant="outline" onClick={() => router.push("/allocate")} disabled={saving}>Cancel</Button>
-        <Button onClick={save} disabled={saving}>
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
-          Save allocation & send email
+        <Button
+          onClick={() => hasTaxableMismatch && !confirmSend ? setConfirmSend(true) : save()}
+          disabled={saving}
+          className={hasTaxableMismatch && !confirmSend ? "gap-2 bg-amber-600 hover:bg-amber-700 text-white border-0" : "gap-2"}
+        >
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : hasTaxableMismatch && !confirmSend ? <AlertTriangle className="h-4 w-4" /> : <Mail className="h-4 w-4" />}
+          {hasTaxableMismatch && !confirmSend ? "Price mismatch — click again to confirm send" : "Save allocation & send email"}
         </Button>
       </div>
     </div>
