@@ -35,16 +35,26 @@ export function PoAllocator({
   const [alloc, setAlloc] = useState<Record<string, number>>(() =>
     Object.fromEntries(lines.map((l) => [l.skuId, l.approvedQty ?? l.requestedQty ?? 0])),
   );
+  const [rawInputs, setRawInputs] = useState<Record<string, string>>(() =>
+    Object.fromEntries(lines.map((l) => [l.skuId, String(l.approvedQty ?? l.requestedQty ?? 0)])),
+  );
   const [saving, setSaving] = useState(false);
   const [confirmSend, setConfirmSend] = useState(false);
 
-  const set = (skuId: string, raw: string) =>
+  const set = (skuId: string, raw: string) => {
+    setRawInputs((p) => ({ ...p, [skuId]: raw }));
     setAlloc((p) => ({ ...p, [skuId]: Math.max(0, Math.floor(Number(raw) || 0)) }));
+  };
 
-  const fillOrdered = () =>
+  const fillOrdered = () => {
     setAlloc(Object.fromEntries(lines.map((l) => [l.skuId, l.requestedQty])));
-  const matchReceived = () =>
-    setAlloc(Object.fromEntries(lines.map((l) => [l.skuId, receivedBySku[l.skuId] ?? 0])));
+    setRawInputs(Object.fromEntries(lines.map((l) => [l.skuId, String(l.requestedQty)])));
+  };
+  const matchReceived = () => {
+    const nums = Object.fromEntries(lines.map((l) => [l.skuId, receivedBySku[l.skuId] ?? 0]));
+    setAlloc(nums);
+    setRawInputs(Object.fromEntries(Object.entries(nums).map(([k, v]) => [k, String(v)])));
+  };
 
   const totalOrdered = lines.reduce((s, l) => s + l.requestedQty, 0);
   const totalAlloc = lines.reduce((s, l) => s + (alloc[l.skuId] ?? 0), 0);
@@ -119,8 +129,11 @@ export function PoAllocator({
                     <input
                       type="number"
                       min={0}
-                      value={val || ""}
+                      value={rawInputs[l.skuId] ?? ""}
                       onChange={(e) => set(l.skuId, e.target.value)}
+                      onBlur={() =>
+                        setRawInputs((p) => ({ ...p, [l.skuId]: String(alloc[l.skuId] ?? 0) }))
+                      }
                       className={cn(
                         "h-9 w-24 rounded-lg border bg-card px-2 text-right text-sm nums outline-none focus:ring-2 focus:ring-ring/40",
                         tone,
