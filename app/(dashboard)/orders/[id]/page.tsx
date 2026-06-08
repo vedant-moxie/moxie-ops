@@ -144,7 +144,6 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
                       <TableHead>Item ID</TableHead>
-                      <TableHead>UPC</TableHead>
                       <TableHead>Product</TableHead>
                       <TableHead>UOM</TableHead>
                       <TableHead className="text-right">Ordered</TableHead>
@@ -170,7 +169,6 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                       return (
                         <TableRow key={li.id} className={tv?.mismatch ? "bg-amber-50/50 dark:bg-amber-950/10" : undefined}>
                           <TableCell className="font-mono text-xs">{li.channelSkuCode ?? li.sku.internalCode}</TableCell>
-                          <TableCell className="font-mono text-xs text-muted-foreground">{raw.upc ?? raw.eanNo ?? "—"}</TableCell>
                           <TableCell className="max-w-[280px]">
                             <div className="truncate text-sm">{li.sku.name}</div>
                           </TableCell>
