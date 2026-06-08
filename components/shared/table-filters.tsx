@@ -1,9 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { X } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -13,7 +11,8 @@ import { cn } from "@/lib/utils";
  * Shared per-column filter primitives for the main data tables (Orders, GRN,
  * Allocation). Categorical → Select with an "All" option, text → debounced
  * search Input, numeric/date → compact min/max range. All filtering is
- * client-side via useMemo in each table; these components are presentational.
+ * client-side via useMemo in each table; these components are presentational
+ * and are dropped into the column-header popovers (see ./column-filter).
  */
 
 /** Debounce a rapidly-changing value (e.g. a text input) for use in filtering. */
@@ -24,56 +23,6 @@ export function useDebounced<T>(value: T, delay = 200): T {
     return () => clearTimeout(t);
   }, [value, delay]);
   return debounced;
-}
-
-/** Row of filter controls with a trailing "Clear filters" action + filtered count. */
-export function FilterBar({
-  children,
-  active,
-  onClear,
-  count,
-  total,
-  noun = "rows",
-}: {
-  children: ReactNode;
-  active: boolean;
-  onClear: () => void;
-  count: number;
-  total: number;
-  noun?: string;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-2 px-5 pb-3 pt-1">
-      {children}
-      {active && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onClear}
-          className="h-9 gap-1 text-muted-foreground"
-        >
-          <X className="h-3.5 w-3.5" /> Clear filters
-        </Button>
-      )}
-      <span className="ml-auto text-sm text-muted-foreground">
-        {count === total
-          ? `${total} ${noun}`
-          : `showing ${count} of ${total} ${noun}`}
-      </span>
-    </div>
-  );
-}
-
-/** Optional small caption preceding a range control so date/number ranges read clearly. */
-export function FilterGroup({ label, children }: { label?: string; children: ReactNode }) {
-  return (
-    <div className="flex items-center gap-1.5">
-      {label && (
-        <span className="whitespace-nowrap text-xs text-muted-foreground">{label}</span>
-      )}
-      {children}
-    </div>
-  );
 }
 
 /** Debounced text search input. Caller owns the raw value; debounce in the table. */

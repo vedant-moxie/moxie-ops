@@ -13,9 +13,13 @@ import { ChannelChip } from "@/components/shared/channel-chip";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { PriorityBadge } from "@/components/dashboard/priority-badge";
 import { EmptyState } from "@/components/shared/empty-state";
+import { ColumnFilter } from "@/components/shared/column-filter";
 import {
-  FilterBar, FilterGroup, SearchFilter, SelectFilter,
-  NumberRangeFilter, DateRangeFilter, useDebounced, inNumberRange, inDateRange,
+  TableToolbar, useTableDensity, densityClass, type FilterChipDef,
+} from "@/components/shared/table-toolbar";
+import {
+  SearchFilter, SelectFilter, NumberRangeFilter, DateRangeFilter,
+  useDebounced, inNumberRange, inDateRange,
 } from "@/components/shared/table-filters";
 import { PO_STATUS_META, PRIORITY_META } from "@/lib/status";
 import { formatINR, formatDate } from "@/lib/utils";
@@ -42,6 +46,7 @@ export function PoTable({
   pos: PoRow[];
   showAllocateCta?: boolean;
 }) {
+  const [density, setDensity] = useTableDensity("po-table-density");
   const [channelSlug, setChannelSlug] = useState("all");
   const [status, setStatus] = useState("all");
   const [priority, setPriority] = useState("all");
@@ -50,15 +55,8 @@ export function PoTable({
   const [valueMax, setValueMax] = useState("");
   const [deliveryFrom, setDeliveryFrom] = useState("");
   const [deliveryTo, setDeliveryTo] = useState("");
-  const [poDateFrom, setPoDateFrom] = useState("");
-  const [poDateTo, setPoDateTo] = useState("");
 
   const debouncedPoNumber = useDebounced(poNumber);
-
-  const active =
-    channelSlug !== "all" || status !== "all" || priority !== "all" ||
-    poNumber !== "" || valueMin !== "" || valueMax !== "" ||
-    deliveryFrom !== "" || deliveryTo !== "" || poDateFrom !== "" || poDateTo !== "";
 
   function clearFilters() {
     setChannelSlug("all");
@@ -69,65 +67,50 @@ export function PoTable({
     setValueMax("");
     setDeliveryFrom("");
     setDeliveryTo("");
-    setPoDateFrom("");
-    setPoDateTo("");
   }
 
+  const channelName = CHANNELS.find((c) => c.slug === channelSlug)?.name;
+  const chips: FilterChipDef[] = [];
+  if (channelSlug !== "all")
+    chips.push({ key: "channel", label: channelName ?? channelSlug, onRemove: () => setChannelSlug("all") });
+  if (poNumber !== "")
+    chips.push({ key: "po", label: `PO: ${poNumber}`, onRemove: () => setPoNumber("") });
+  if (valueMin !== "" || valueMax !== "")
+    chips.push({ key: "value", label: `Value ${valueMin || "0"}–${valueMax || "∞"}`, onRemove: () => { setValueMin(""); setValueMax(""); } });
+  if (priority !== "all")
+    chips.push({ key: "priority", label: PRIORITY_META[priority]?.label ?? priority, onRemove: () => setPriority("all") });
+  if (deliveryFrom !== "" || deliveryTo !== "")
+    chips.push({ key: "delivery", label: `Delivery ${deliveryFrom || "…"}–${deliveryTo || "…"}`, onRemove: () => { setDeliveryFrom(""); setDeliveryTo(""); } });
+  if (status !== "all")
+    chips.push({ key: "status", label: PO_STATUS_META[status as PoStatus]?.label ?? status, onRemove: () => setStatus("all") });
+
   const filtered = useMemo(() => {
-    const selectedChannel = CHANNELS.find((c) => c.slug === channelSlug);
     const q = debouncedPoNumber.trim().toLowerCase();
     return pos.filter(
       (p) =>
-        (channelSlug === "all" || p.channel.name === selectedChannel?.name) &&
+        (channelSlug === "all" || p.channel.name === channelName) &&
         (status === "all" || p.status === status) &&
         (priority === "all" || p.priority === priority) &&
         (q === "" || (p.channelPoNumber ?? "").toLowerCase().includes(q)) &&
         inNumberRange(p.totalRequestedValue, valueMin, valueMax) &&
-        inDateRange(p.requestedDeliveryDate, deliveryFrom, deliveryTo) &&
-        inDateRange(p.poDate, poDateFrom, poDateTo),
+        inDateRange(p.requestedDeliveryDate, deliveryFrom, deliveryTo),
     );
   }, [
-    pos, channelSlug, status, priority, debouncedPoNumber,
-    valueMin, valueMax, deliveryFrom, deliveryTo, poDateFrom, poDateTo,
+    pos, channelSlug, channelName, status, priority, debouncedPoNumber,
+    valueMin, valueMax, deliveryFrom, deliveryTo,
   ]);
 
   return (
     <div>
-      <FilterBar
-        active={active}
-        onClear={clearFilters}
+      <TableToolbar
+        density={density}
+        onDensityChange={setDensity}
+        chips={chips}
+        onClearAll={clearFilters}
         count={filtered.length}
         total={pos.length}
         noun="orders"
-      >
-        <SelectFilter value={channelSlug} onChange={setChannelSlug} allLabel="All channels" width="w-[200px]">
-          {CHANNELS.map((c) => (
-            <SelectItem key={c.slug} value={c.slug}>
-              <ChannelChip name={c.name} color={c.logoColor} />
-            </SelectItem>
-          ))}
-        </SelectFilter>
-        <SelectFilter value={status} onChange={setStatus} allLabel="All statuses">
-          {Object.entries(PO_STATUS_META).map(([k, v]) => (
-            <SelectItem key={k} value={k}>{v.label}</SelectItem>
-          ))}
-        </SelectFilter>
-        <SelectFilter value={priority} onChange={setPriority} allLabel="All priorities" width="w-[150px]">
-          {Object.entries(PRIORITY_META).map(([k, v]) => (
-            <SelectItem key={k} value={k}>{v.label}</SelectItem>
-          ))}
-        </SelectFilter>
-        <SearchFilter value={poNumber} onChange={setPoNumber} placeholder="PO number…" />
-        <FilterGroup label="Value">
-          <NumberRangeFilter min={valueMin} max={valueMax} onMin={setValueMin} onMax={setValueMax} />
-        </FilterGroup>
-        <FilterGroup label="Delivery">
-          <DateRangeFilter from={deliveryFrom} to={deliveryTo} onFrom={setDeliveryFrom} onTo={setDeliveryTo} />
-        </FilterGroup>
-        <FilterGroup label="PO date">
-          <DateRangeFilter from={poDateFrom} to={poDateTo} onFrom={setPoDateFrom} onTo={setPoDateTo} />
-        </FilterGroup>
-      </FilterBar>
+      />
 
       {filtered.length === 0 ? (
         <EmptyState
@@ -136,16 +119,54 @@ export function PoTable({
           description="The Gmail poller checks for new purchase orders every 10 minutes."
         />
       ) : (
-        <Table>
+        <Table className={densityClass(density)}>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead>Channel</TableHead>
-              <TableHead>PO Number</TableHead>
-              <TableHead className="text-right">Value</TableHead>
-              <TableHead>Priority</TableHead>
+              <TableHead>
+                <ColumnFilter label="Channel" active={channelSlug !== "all"} onClear={() => setChannelSlug("all")}>
+                  <SelectFilter value={channelSlug} onChange={setChannelSlug} allLabel="All channels" width="w-full">
+                    {CHANNELS.map((c) => (
+                      <SelectItem key={c.slug} value={c.slug}>
+                        <ChannelChip name={c.name} color={c.logoColor} />
+                      </SelectItem>
+                    ))}
+                  </SelectFilter>
+                </ColumnFilter>
+              </TableHead>
+              <TableHead>
+                <ColumnFilter label="PO Number" active={poNumber !== ""} onClear={() => setPoNumber("")}>
+                  <SearchFilter value={poNumber} onChange={setPoNumber} placeholder="PO number…" className="w-full" />
+                </ColumnFilter>
+              </TableHead>
+              <TableHead className="text-right">
+                <ColumnFilter label="Value" align="right" active={valueMin !== "" || valueMax !== ""} onClear={() => { setValueMin(""); setValueMax(""); }}>
+                  <NumberRangeFilter min={valueMin} max={valueMax} onMin={setValueMin} onMax={setValueMax} />
+                </ColumnFilter>
+              </TableHead>
+              <TableHead>
+                <ColumnFilter label="Priority" active={priority !== "all"} onClear={() => setPriority("all")}>
+                  <SelectFilter value={priority} onChange={setPriority} allLabel="All priorities" width="w-full">
+                    {Object.entries(PRIORITY_META).map(([k, v]) => (
+                      <SelectItem key={k} value={k}>{v.label}</SelectItem>
+                    ))}
+                  </SelectFilter>
+                </ColumnFilter>
+              </TableHead>
               <TableHead className="text-right">SKUs</TableHead>
-              <TableHead>Delivery</TableHead>
-              <TableHead>Status</TableHead>
+              <TableHead>
+                <ColumnFilter label="Delivery" active={deliveryFrom !== "" || deliveryTo !== ""} onClear={() => { setDeliveryFrom(""); setDeliveryTo(""); }}>
+                  <DateRangeFilter from={deliveryFrom} to={deliveryTo} onFrom={setDeliveryFrom} onTo={setDeliveryTo} />
+                </ColumnFilter>
+              </TableHead>
+              <TableHead>
+                <ColumnFilter label="Status" active={status !== "all"} onClear={() => setStatus("all")}>
+                  <SelectFilter value={status} onChange={setStatus} allLabel="All statuses" width="w-full">
+                    {Object.entries(PO_STATUS_META).map(([k, v]) => (
+                      <SelectItem key={k} value={k}>{v.label}</SelectItem>
+                    ))}
+                  </SelectFilter>
+                </ColumnFilter>
+              </TableHead>
               <TableHead className="text-right">Action</TableHead>
             </TableRow>
           </TableHeader>

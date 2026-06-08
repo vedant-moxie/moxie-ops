@@ -9,15 +9,17 @@ import type { PoStatus } from "@prisma/client";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { SelectItem } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ChannelChip } from "@/components/shared/channel-chip";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
-import { SelectFilter, useDebounced } from "@/components/shared/table-filters";
+import { ColumnFilter } from "@/components/shared/column-filter";
+import {
+  TableToolbar, useTableDensity, densityClass, type FilterChipDef,
+} from "@/components/shared/table-toolbar";
+import { SearchFilter, SelectFilter, useDebounced } from "@/components/shared/table-filters";
 import { PO_STATUS_META, PO_STATUS_ORDER } from "@/lib/status";
 import { CHANNELS } from "@/lib/channels";
 import { cn, formatINR, formatNumber, formatDate } from "@/lib/utils";
@@ -39,6 +41,7 @@ export interface AllocRow {
 
 export function AllocationList({ rows }: { rows: AllocRow[] }) {
   const router = useRouter();
+  const [density, setDensity] = useTableDensity("allocation-table-density");
   const [q, setQ] = useState("");
   const [channelSlug, setChannelSlug] = useState("all");
   const [status, setStatus] = useState("all");
@@ -49,13 +52,20 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
 
   const debouncedQ = useDebounced(q);
 
-  const filtersActive = q !== "" || channelSlug !== "all" || status !== "all";
-
   function clearFilters() {
     setQ("");
     setChannelSlug("all");
     setStatus("all");
   }
+
+  const channelName = CHANNELS.find((c) => c.slug === channelSlug)?.name;
+  const chips: FilterChipDef[] = [];
+  if (channelSlug !== "all")
+    chips.push({ key: "channel", label: channelName ?? channelSlug, onRemove: () => setChannelSlug("all") });
+  if (q !== "")
+    chips.push({ key: "search", label: `Search: ${q}`, onRemove: () => setQ("") });
+  if (status !== "all")
+    chips.push({ key: "status", label: PO_STATUS_META[status as PoStatus]?.label ?? status, onRemove: () => setStatus("all") });
 
   const statusOptions = useMemo(() => {
     const present = new Set(rows.map((r) => r.status));
@@ -64,16 +74,15 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
 
   const filtered = useMemo(() => {
     const s = debouncedQ.trim().toLowerCase();
-    const selectedChannel = CHANNELS.find((c) => c.slug === channelSlug);
     return rows.filter(
       (r) =>
         (s === "" ||
           (r.channelPoNumber ?? "").toLowerCase().includes(s) ||
           (r.facility ?? "").toLowerCase().includes(s)) &&
-        (channelSlug === "all" || r.channel.name === selectedChannel?.name) &&
+        (channelSlug === "all" || r.channel.name === channelName) &&
         (status === "all" || r.status === status),
     );
-  }, [rows, debouncedQ, channelSlug, status]);
+  }, [rows, debouncedQ, channelSlug, channelName, status]);
 
   const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
 
@@ -167,35 +176,15 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
 
   return (
     <div>
-      <div className="px-5 pb-3 pt-1 flex flex-wrap items-center gap-2">
-        <Input
-          placeholder="Search PO number or facility…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          className="h-9 w-[240px]"
-        />
-        <SelectFilter value={channelSlug} onChange={setChannelSlug} allLabel="All channels" width="w-[180px]">
-          {CHANNELS.map((c) => (
-            <SelectItem key={c.slug} value={c.slug}>
-              <ChannelChip name={c.name} color={c.logoColor} />
-            </SelectItem>
-          ))}
-        </SelectFilter>
-        <SelectFilter value={status} onChange={setStatus} allLabel="All statuses">
-          {statusOptions.map((s) => (
-            <SelectItem key={s} value={s}>{PO_STATUS_META[s].label}</SelectItem>
-          ))}
-        </SelectFilter>
-        {filtersActive && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={clearFilters}
-            className="h-9 gap-1 text-muted-foreground"
-          >
-            <X className="h-3.5 w-3.5" /> Clear filters
-          </Button>
-        )}
+      <TableToolbar
+        density={density}
+        onDensityChange={setDensity}
+        chips={chips}
+        onClearAll={clearFilters}
+        count={filtered.length}
+        total={rows.length}
+        noun="POs"
+      >
         {selectedCount > 0 && (
           <Button
             onClick={requestBulkSend}
@@ -208,14 +197,9 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
               : `Allocate full & send (${selectedCount})`}
           </Button>
         )}
-        <span className="ml-auto text-sm text-muted-foreground">
-          {filtered.length === rows.length
-            ? `${rows.length} PO${rows.length === 1 ? "" : "s"}`
-            : `showing ${filtered.length} of ${rows.length} POs`}
-        </span>
-      </div>
+      </TableToolbar>
 
-      <Table>
+      <Table className={densityClass(density)}>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead className="w-10">
@@ -232,14 +216,36 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
                 aria-label="Select all filtered"
               />
             </TableHead>
-            <TableHead>Channel</TableHead>
-            <TableHead>PO Number</TableHead>
+            <TableHead>
+              <ColumnFilter label="Channel" active={channelSlug !== "all"} onClear={() => setChannelSlug("all")}>
+                <SelectFilter value={channelSlug} onChange={setChannelSlug} allLabel="All channels" width="w-full">
+                  {CHANNELS.map((c) => (
+                    <SelectItem key={c.slug} value={c.slug}>
+                      <ChannelChip name={c.name} color={c.logoColor} />
+                    </SelectItem>
+                  ))}
+                </SelectFilter>
+              </ColumnFilter>
+            </TableHead>
+            <TableHead>
+              <ColumnFilter label="PO Number" active={q !== ""} onClear={() => setQ("")}>
+                <SearchFilter value={q} onChange={setQ} placeholder="PO number or facility…" className="w-full" />
+              </ColumnFilter>
+            </TableHead>
             <TableHead>Facility</TableHead>
             <TableHead>PO date</TableHead>
             <TableHead className="text-right">SKUs</TableHead>
             <TableHead className="text-right">Ordered</TableHead>
             <TableHead className="text-right">Allocated</TableHead>
-            <TableHead>Status</TableHead>
+            <TableHead>
+              <ColumnFilter label="Status" active={status !== "all"} onClear={() => setStatus("all")}>
+                <SelectFilter value={status} onChange={setStatus} allLabel="All statuses" width="w-full">
+                  {statusOptions.map((s) => (
+                    <SelectItem key={s} value={s}>{PO_STATUS_META[s].label}</SelectItem>
+                  ))}
+                </SelectFilter>
+              </ColumnFilter>
+            </TableHead>
             <TableHead className="text-right">Action</TableHead>
           </TableRow>
         </TableHeader>

@@ -11,9 +11,12 @@ import { SelectItem } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { ChannelChip } from "@/components/shared/channel-chip";
 import { EmptyState } from "@/components/shared/empty-state";
+import { ColumnFilter } from "@/components/shared/column-filter";
 import {
-  FilterBar, FilterGroup, SearchFilter, SelectFilter,
-  DateRangeFilter, useDebounced, inDateRange,
+  TableToolbar, useTableDensity, densityClass, type FilterChipDef,
+} from "@/components/shared/table-toolbar";
+import {
+  SearchFilter, SelectFilter, DateRangeFilter, useDebounced, inDateRange,
 } from "@/components/shared/table-filters";
 import { GRN_STATUS_META } from "@/lib/status";
 import { CHANNELS } from "@/lib/channels";
@@ -57,7 +60,13 @@ function MatchBadge({ isPerfect, fillRatePct, variances }: Pick<GrnRow, "isPerfe
   return <Badge variant={fillRatePct < 80 ? "danger" : "warning"}>{label}</Badge>;
 }
 
+const MATCH_LABEL: Record<string, string> = {
+  perfect: "Perfect",
+  discrepancy: "Has discrepancy",
+};
+
 export function GrnTable({ grns }: { grns: GrnRow[] }) {
+  const [density, setDensity] = useTableDensity("grn-table-density");
   const [channelSlug, setChannelSlug] = useState("all");
   const [source, setSource] = useState("all");
   const [status, setStatus] = useState("all");
@@ -67,10 +76,6 @@ export function GrnTable({ grns }: { grns: GrnRow[] }) {
   const [receivedTo, setReceivedTo] = useState("");
 
   const debouncedSearch = useDebounced(search);
-
-  const active =
-    channelSlug !== "all" || source !== "all" || status !== "all" ||
-    match !== "all" || search !== "" || receivedFrom !== "" || receivedTo !== "";
 
   function clearFilters() {
     setChannelSlug("all");
@@ -82,12 +87,26 @@ export function GrnTable({ grns }: { grns: GrnRow[] }) {
     setReceivedTo("");
   }
 
+  const channelName = CHANNELS.find((c) => c.slug === channelSlug)?.name;
+  const chips: FilterChipDef[] = [];
+  if (channelSlug !== "all")
+    chips.push({ key: "channel", label: channelName ?? channelSlug, onRemove: () => setChannelSlug("all") });
+  if (search !== "")
+    chips.push({ key: "search", label: `Search: ${search}`, onRemove: () => setSearch("") });
+  if (source !== "all")
+    chips.push({ key: "source", label: SOURCE_META[source as GrnSource]?.label ?? source, onRemove: () => setSource("all") });
+  if (match !== "all")
+    chips.push({ key: "match", label: MATCH_LABEL[match] ?? match, onRemove: () => setMatch("all") });
+  if (receivedFrom !== "" || receivedTo !== "")
+    chips.push({ key: "received", label: `Received ${receivedFrom || "…"}–${receivedTo || "…"}`, onRemove: () => { setReceivedFrom(""); setReceivedTo(""); } });
+  if (status !== "all")
+    chips.push({ key: "status", label: GRN_STATUS_META[status as GrnStatus]?.label ?? status, onRemove: () => setStatus("all") });
+
   const filtered = useMemo(() => {
-    const selectedChannel = CHANNELS.find((c) => c.slug === channelSlug);
     const q = debouncedSearch.trim().toLowerCase();
     return grns.filter(
       (g) =>
-        (channelSlug === "all" || g.po.channel.name === selectedChannel?.name) &&
+        (channelSlug === "all" || g.po.channel.name === channelName) &&
         (source === "all" || g.source === source) &&
         (status === "all" || g.status === status) &&
         (match === "all" ||
@@ -97,7 +116,7 @@ export function GrnTable({ grns }: { grns: GrnRow[] }) {
           (g.po.channelPoNumber ?? "").toLowerCase().includes(q)) &&
         inDateRange(g.receivedAt, receivedFrom, receivedTo),
     );
-  }, [grns, channelSlug, source, status, match, debouncedSearch, receivedFrom, receivedTo]);
+  }, [grns, channelSlug, channelName, source, status, match, debouncedSearch, receivedFrom, receivedTo]);
 
   if (grns.length === 0) {
     return (
@@ -110,41 +129,15 @@ export function GrnTable({ grns }: { grns: GrnRow[] }) {
   }
   return (
     <div>
-      <FilterBar
-        active={active}
-        onClear={clearFilters}
+      <TableToolbar
+        density={density}
+        onDensityChange={setDensity}
+        chips={chips}
+        onClearAll={clearFilters}
         count={filtered.length}
         total={grns.length}
         noun="GRNs"
-      >
-        <SelectFilter value={channelSlug} onChange={setChannelSlug} allLabel="All channels" width="w-[180px]">
-          {CHANNELS.map((c) => (
-            <SelectItem key={c.slug} value={c.slug}>
-              <ChannelChip name={c.name} color={c.logoColor} />
-            </SelectItem>
-          ))}
-        </SelectFilter>
-        <SelectFilter value={source} onChange={setSource} allLabel="All sources" width="w-[150px]">
-          {(Object.entries(SOURCE_META) as [GrnSource, (typeof SOURCE_META)[GrnSource]][]).map(
-            ([k, v]) => (
-              <SelectItem key={k} value={k}>{v.label}</SelectItem>
-            ),
-          )}
-        </SelectFilter>
-        <SelectFilter value={status} onChange={setStatus} allLabel="All statuses">
-          {Object.entries(GRN_STATUS_META).map(([k, v]) => (
-            <SelectItem key={k} value={k}>{v.label}</SelectItem>
-          ))}
-        </SelectFilter>
-        <SelectFilter value={match} onChange={setMatch} allLabel="All matches" width="w-[170px]">
-          <SelectItem value="perfect">Perfect</SelectItem>
-          <SelectItem value="discrepancy">Has discrepancy</SelectItem>
-        </SelectFilter>
-        <SearchFilter value={search} onChange={setSearch} placeholder="GRN or PO number…" />
-        <FilterGroup label="Received">
-          <DateRangeFilter from={receivedFrom} to={receivedTo} onFrom={setReceivedFrom} onTo={setReceivedTo} />
-        </FilterGroup>
-      </FilterBar>
+      />
 
       {filtered.length === 0 ? (
         <EmptyState
@@ -153,17 +146,60 @@ export function GrnTable({ grns }: { grns: GrnRow[] }) {
           description="Adjust or clear the filters to see more results."
         />
       ) : (
-    <Table>
+    <Table className={densityClass(density)}>
       <TableHeader>
         <TableRow className="hover:bg-transparent">
-          <TableHead>Channel</TableHead>
-          <TableHead>GRN / PO</TableHead>
-          <TableHead>Source</TableHead>
+          <TableHead>
+            <ColumnFilter label="Channel" active={channelSlug !== "all"} onClear={() => setChannelSlug("all")}>
+              <SelectFilter value={channelSlug} onChange={setChannelSlug} allLabel="All channels" width="w-full">
+                {CHANNELS.map((c) => (
+                  <SelectItem key={c.slug} value={c.slug}>
+                    <ChannelChip name={c.name} color={c.logoColor} />
+                  </SelectItem>
+                ))}
+              </SelectFilter>
+            </ColumnFilter>
+          </TableHead>
+          <TableHead>
+            <ColumnFilter label="GRN / PO" active={search !== ""} onClear={() => setSearch("")}>
+              <SearchFilter value={search} onChange={setSearch} placeholder="GRN or PO number…" className="w-full" />
+            </ColumnFilter>
+          </TableHead>
+          <TableHead>
+            <ColumnFilter label="Source" active={source !== "all"} onClear={() => setSource("all")}>
+              <SelectFilter value={source} onChange={setSource} allLabel="All sources" width="w-full">
+                {(Object.entries(SOURCE_META) as [GrnSource, (typeof SOURCE_META)[GrnSource]][]).map(
+                  ([k, v]) => (
+                    <SelectItem key={k} value={k}>{v.label}</SelectItem>
+                  ),
+                )}
+              </SelectFilter>
+            </ColumnFilter>
+          </TableHead>
           <TableHead className="text-right">Lines</TableHead>
           <TableHead className="text-right">Discrepancies</TableHead>
-          <TableHead>Match</TableHead>
-          <TableHead>Received</TableHead>
-          <TableHead>Status</TableHead>
+          <TableHead>
+            <ColumnFilter label="Match" active={match !== "all"} onClear={() => setMatch("all")}>
+              <SelectFilter value={match} onChange={setMatch} allLabel="All matches" width="w-full">
+                <SelectItem value="perfect">Perfect</SelectItem>
+                <SelectItem value="discrepancy">Has discrepancy</SelectItem>
+              </SelectFilter>
+            </ColumnFilter>
+          </TableHead>
+          <TableHead>
+            <ColumnFilter label="Received" active={receivedFrom !== "" || receivedTo !== ""} onClear={() => { setReceivedFrom(""); setReceivedTo(""); }}>
+              <DateRangeFilter from={receivedFrom} to={receivedTo} onFrom={setReceivedFrom} onTo={setReceivedTo} />
+            </ColumnFilter>
+          </TableHead>
+          <TableHead>
+            <ColumnFilter label="Status" active={status !== "all"} onClear={() => setStatus("all")}>
+              <SelectFilter value={status} onChange={setStatus} allLabel="All statuses" width="w-full">
+                {Object.entries(GRN_STATUS_META).map(([k, v]) => (
+                  <SelectItem key={k} value={k}>{v.label}</SelectItem>
+                ))}
+              </SelectFilter>
+            </ColumnFilter>
+          </TableHead>
           <TableHead />
         </TableRow>
       </TableHeader>

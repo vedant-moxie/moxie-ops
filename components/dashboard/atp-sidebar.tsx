@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Boxes, RefreshCw } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { cn, formatNumber } from "@/lib/utils";
+import { resolveInternalSkuAnyChannel } from "@/lib/services/sku-resolver";
 import type { AtpRow } from "@/lib/integrations/sheets";
 
 function health(atp: number, demand: number): "green" | "amber" | "red" {
@@ -73,11 +74,15 @@ export function AtpSidebar({
         {sorted.map((r) => {
           const d = demand[r.skuId] ?? 0;
           const h = health(r.atpQty, d);
+          const internalCode = resolveInternalSkuAnyChannel(r.internalCode);
           return (
             <div key={r.skuId}>
               <div className="flex items-baseline justify-between gap-2">
-                <span className="truncate text-[13px] font-medium">
-                  {r.name || r.internalCode}
+                <span
+                  className="truncate text-[13px] font-semibold nums"
+                  title={r.name || undefined}
+                >
+                  {internalCode}
                 </span>
                 <span className="shrink-0 text-[13px] font-semibold nums">
                   {formatNumber(r.atpQty)}
@@ -89,8 +94,8 @@ export function AtpSidebar({
                   style={{ width: `${Math.min(100, (r.atpQty / maxAtp) * 100)}%` }}
                 />
               </div>
-              <div className="mt-1 text-[11px] text-muted-foreground">
-                {r.name && <span className="mr-1">{r.internalCode} ·</span>}
+              <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                {r.name && <span className="mr-1">{r.name} ·</span>}
                 demand {formatNumber(d)} · ATP {formatNumber(r.atpQty)}
               </div>
             </div>
