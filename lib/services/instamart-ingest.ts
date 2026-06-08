@@ -115,15 +115,16 @@ export async function ingestLiveInstamartPOs(
     const poDate = epochMs(po.po_date ?? po.poDate);
     const expiryDate = epochMs(po.expiry_date ?? po.expiryDate);
     const totalQty = Math.max(0, Math.round(Number(po.total_quantity ?? po.totalQuantity ?? po.total_qty ?? 0) || 0));
-    // PO-level received total — Instamart listPurchaseOrderLines has no per-SKU received field,
-    // so this is the only GRN signal available.
-    const grnQty = Math.max(0, Math.round(Number(po.grn_quantity ?? po.grnQuantity ?? 0) || 0));
+    // PO-level grn_quantity kept as fallback for status when no line items are returned.
+    const poLevelGrnQty = Math.max(0, Math.round(Number(po.grn_quantity ?? po.grnQuantity ?? 0) || 0));
     const totalValue = Number(po.value ?? po.totalValue ?? po.total_value ?? 0) || null;
     const statusRaw = String(po.status ?? "");
     const receivingStatusRaw = String(po.receiving_status ?? po.receivingStatus ?? "");
-    const status = mapInstamartLiveStatus(statusRaw, receivingStatusRaw, grnQty, totalQty);
 
-    type LineSpec = { code: string; name: string; qty: number; unitPrice: number | null; rawData: Prisma.InputJsonValue };
+    // grn_qty per line item is the REAL per-SKU fulfilled quantity from listPurchaseOrderLines.
+    // Field key confirmed from live API response: "grn_qty" (snake_case).
+    // SKUs with zero fulfillment (stock-out) omit the field entirely.
+    type LineSpec = { code: string; name: string; qty: number; receivedQty: number; unitPrice: number | null; rawData: Prisma.InputJsonValue };
     let lineSpecs: LineSpec[];
 
     const apiLines = extractLiveLines(po);
@@ -138,40 +139,35 @@ export async function ingestLiveInstamartPOs(
           `IM-${poNo.replace(/[^A-Z0-9]/gi, "").slice(0, 12)}-L${i}`;
         const name = rawName || code;
         const qty = Math.max(0, Math.round(Number(line.quantity ?? line.qty ?? line.ordered_qty ?? line.orderedQty ?? 0) || 0));
+        // grn_qty is the confirmed per-SKU received qty from listPurchaseOrderLines.
+        // Absent on stock-out lines (treated as 0).
+        const grnRaw = line.grn_qty ?? line.grnQty ?? null;
+        const receivedQty = grnRaw != null ? Math.max(0, Math.round(Number(grnRaw) || 0)) : 0;
         const unitPrice = Number(line.unit_price ?? line.unitPrice ?? line.price ?? null) || null;
-        return { code, name, qty, unitPrice, rawData: line as Prisma.InputJsonValue };
+        return { code, name, qty, receivedQty, unitPrice, rawData: line as Prisma.InputJsonValue };
       });
     } else {
-      // Header-only: create a single summary line so the PO is visible and never crashes
+      // Header-only: create a single summary line so the PO is visible and never crashes.
+      // receivedQty is left 0 — no per-SKU breakdown available.
       const summaryCode = `IM-SUMM-${poNo.replace(/[^A-Z0-9]/gi, "").slice(0, 16)}`;
       const summaryName = `Instamart PO ${poNo}${totalQty > 0 ? ` (${totalQty} units)` : ""}`;
       const unitPrice = totalValue && totalQty > 0 ? Math.round((totalValue / totalQty) * 100) / 100 : null;
-      lineSpecs = [{ code: summaryCode, name: summaryName, qty: Math.max(1, totalQty), unitPrice, rawData: po as Prisma.InputJsonValue }];
+      lineSpecs = [{ code: summaryCode, name: summaryName, qty: Math.max(1, totalQty), receivedQty: 0, unitPrice, rawData: po as Prisma.InputJsonValue }];
       warnings.push(`PO ${poNo}: API returned no line items — 1 summary line created (qty=${totalQty}, value=${totalValue ?? "?"}).`);
     }
 
     // Resolve / create SKUs — every lineSpec gets a valid skuId here
-    const resolvedLines: { skuId: string; channelSkuCode: string | null; requestedQty: number; unitPrice: number | null; rawData: Prisma.InputJsonValue }[] = [];
+    const resolvedLines: { skuId: string; channelSkuCode: string | null; requestedQty: number; receivedQty: number; unitPrice: number | null; rawData: Prisma.InputJsonValue }[] = [];
     for (const spec of lineSpecs) {
       const { id: skuId, created } = await resolveOrCreateSku(spec.code, spec.name, "Instamart", skuCache);
       if (created) skusCreated++;
-      resolvedLines.push({ skuId, channelSkuCode: spec.code, requestedQty: spec.qty, unitPrice: spec.unitPrice, rawData: spec.rawData });
+      resolvedLines.push({ skuId, channelSkuCode: spec.code, requestedQty: spec.qty, receivedQty: spec.receivedQty, unitPrice: spec.unitPrice, rawData: spec.rawData });
     }
 
-    // Instamart exposes no per-SKU received qty in listPurchaseOrderLines — distribute
-    // the PO-level grn_quantity proportionally across lines by ordered weight.
-    const totalOrderedForGrn = resolvedLines.reduce((s, l) => s + l.requestedQty, 0);
-    const buildGrnLineItems = (grnTotal: number) => {
-      if (grnTotal <= 0 || totalOrderedForGrn <= 0) return [];
-      // Proportional: each line receives (lineQty / totalOrdered) * grnTotal, capped at lineQty.
-      return resolvedLines
-        .map((l) => ({
-          skuId: l.skuId,
-          receivedQty: Math.min(l.requestedQty, Math.round((l.requestedQty / totalOrderedForGrn) * grnTotal)),
-          rejectedQty: 0 as const,
-        }))
-        .filter((l) => l.receivedQty > 0);
-    };
+    // Use real per-SKU sum; fall back to PO-level signal only when no line items came back.
+    const totalReceivedQty = resolvedLines.reduce((s, l) => s + l.receivedQty, 0);
+    const effectiveGrn = totalReceivedQty > 0 ? totalReceivedQty : poLevelGrnQty;
+    const status = mapInstamartLiveStatus(statusRaw, receivingStatusRaw, effectiveGrn, totalQty);
 
     const externalId = `instamart:${poNo}`;
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -188,21 +184,31 @@ export async function ingestLiveInstamartPOs(
 
       await tx.poLineItem.deleteMany({ where: { poId: dbPo.id } });
       for (const line of resolvedLines) {
-        await tx.poLineItem.create({ data: { poId: dbPo.id, ...line } });
+        await tx.poLineItem.create({
+          data: {
+            poId: dbPo.id,
+            skuId: line.skuId,
+            channelSkuCode: line.channelSkuCode,
+            requestedQty: line.requestedQty,
+            unitPrice: line.unitPrice,
+            rawData: line.rawData,
+          },
+        });
       }
 
       await tx.discrepancy.deleteMany({ where: { poId: dbPo.id } });
       await tx.grnRecord.deleteMany({ where: { poId: dbPo.id } });
-      // Instamart has no per-SKU received field; distribute PO-level grn_quantity proportionally.
-      const grnLineItems = buildGrnLineItems(grnQty);
-      if (grnLineItems.length > 0) {
-        const allReceived = grnQty >= totalQty && totalQty > 0;
+      const grnLines = resolvedLines.filter((l) => l.receivedQty > 0);
+      if (grnLines.length > 0) {
+        const allReceived = totalReceivedQty >= totalQty && totalQty > 0;
         await tx.grnRecord.create({
           data: {
             poId: dbPo.id, source: "PORTAL", channelGrnNumber: null,
             status: allReceived ? "ACCEPTED" : "PENDING_RECONCILIATION",
             receivedAt: expiryDate ?? poDate,
-            lineItems: { create: grnLineItems },
+            lineItems: {
+              create: grnLines.map((l) => ({ skuId: l.skuId, receivedQty: l.receivedQty, rejectedQty: 0 as const })),
+            },
           },
         });
       }
@@ -210,7 +216,7 @@ export async function ingestLiveInstamartPOs(
       await writeAudit({
         tx, entityType: "PurchaseOrder", entityId: dbPo.id, action: "INSTAMART_IMPORTED",
         performedBy: actorLabel,
-        changes: { poNumber: poNo, lines: resolvedLines.length, totalValue, grnQty, status },
+        changes: { poNumber: poNo, lines: resolvedLines.length, totalValue, totalReceivedQty, status },
       });
     });
 
