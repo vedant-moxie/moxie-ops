@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Upload } from "lucide-react";
+import { Upload, Download } from "lucide-react";
 import { Topbar } from "@/components/layout/topbar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,9 +17,14 @@ export default async function GrnPage() {
         <Card className="overflow-hidden">
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle>All GRNs</CardTitle>
-            <Button asChild size="sm">
-              <Link href="/grn/upload"><Upload className="h-4 w-4" /> Upload CSV</Link>
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button asChild size="sm" variant="outline">
+                <a href="/api/grn/export"><Download className="h-4 w-4" /> Download Excel</a>
+              </Button>
+              <Button asChild size="sm">
+                <Link href="/grn/upload"><Upload className="h-4 w-4" /> Upload CSV</Link>
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="p-0">
             <GrnTable grns={grns} />

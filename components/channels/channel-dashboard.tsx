@@ -10,7 +10,7 @@ import {
 } from "recharts";
 import {
   Package, IndianRupee, Boxes, Store, RefreshCw, Upload, ChevronDown,
-  ChevronRight, FileSpreadsheet, Loader2, Mail,
+  ChevronRight, FileSpreadsheet, Loader2, Mail, Download, ClipboardList,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -158,6 +158,11 @@ export function ChannelDashboard({
           </Button>
         </>
       )}
+      <Button asChild size="sm" variant="outline">
+        <a href={`/api/channels/${channel.slug}/export`}>
+          <Download className="h-4 w-4" /> Download Excel
+        </a>
+      </Button>
       <Button size="sm" onClick={liveSync} disabled={!!busy}>
         {busy === "scan" || pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
         Sync from {channel.name}
@@ -415,6 +420,7 @@ function PoTable({ rows }: { rows: ChannelInsights["pos"] }) {
           <TableHead className="text-right">Lines</TableHead>
           <TableHead className="text-right">Units</TableHead>
           <TableHead className="text-right">Value</TableHead>
+          <TableHead className="text-right">Actions</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -437,10 +443,17 @@ function PoTable({ rows }: { rows: ChannelInsights["pos"] }) {
                 <TableCell className="text-right nums">{po.lineCount}</TableCell>
                 <TableCell className="text-right nums">{formatNumber(po.units)}</TableCell>
                 <TableCell className="text-right nums font-medium">{formatINR(po.value)}</TableCell>
+                <TableCell className="text-right">
+                  <Button asChild size="sm" variant="outline" className="h-7 px-2">
+                    <Link href={`/allocate/${po.id}`} onClick={(e) => e.stopPropagation()}>
+                      <ClipboardList className="h-3.5 w-3.5" /> Allocate
+                    </Link>
+                  </Button>
+                </TableCell>
               </TableRow>
               {isOpen && (
                 <TableRow key={po.id + "-items"} className="hover:bg-transparent">
-                  <TableCell colSpan={8} className="bg-muted/30 p-0">
+                  <TableCell colSpan={9} className="bg-muted/30 p-0">
                     <div className="p-3">
                       <div className="mb-2 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                         SKUs ordered · {po.items.length}
