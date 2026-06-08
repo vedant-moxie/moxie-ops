@@ -17,6 +17,7 @@ import { PriorityBadge } from "@/components/dashboard/priority-badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PO_STATUS_META } from "@/lib/status";
 import { formatINR, formatDate } from "@/lib/utils";
+import { CHANNELS } from "@/lib/channels";
 
 export interface PoRow {
   id: string;
@@ -38,36 +39,31 @@ export function PoTable({
   pos: PoRow[];
   showAllocateCta?: boolean;
 }) {
-  const [channelId, setChannelId] = useState<string>("all");
+  const [channelSlug, setChannelSlug] = useState<string>("all");
   const [status, setStatus] = useState<string>("all");
 
-  const channels = useMemo(() => {
-    const map = new Map<string, { id: string; name: string }>();
-    pos.forEach((p) => map.set(p.channel.id, { id: p.channel.id, name: p.channel.name }));
-    return [...map.values()];
-  }, [pos]);
-
-  const filtered = useMemo(
-    () =>
-      pos.filter(
-        (p) =>
-          (channelId === "all" || p.channel.id === channelId) &&
-          (status === "all" || p.status === status),
-      ),
-    [pos, channelId, status],
-  );
+  const filtered = useMemo(() => {
+    const selectedChannel = CHANNELS.find((c) => c.slug === channelSlug);
+    return pos.filter(
+      (p) =>
+        (channelSlug === "all" || p.channel.name === selectedChannel?.name) &&
+        (status === "all" || p.status === status),
+    );
+  }, [pos, channelSlug, status]);
 
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2 px-5 pb-3 pt-1">
-        <Select value={channelId} onValueChange={setChannelId}>
-          <SelectTrigger className="h-9 w-[160px]">
+        <Select value={channelSlug} onValueChange={setChannelSlug}>
+          <SelectTrigger className="h-9 w-[200px]">
             <SelectValue placeholder="All channels" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All channels</SelectItem>
-            {channels.map((c) => (
-              <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+            {CHANNELS.map((c) => (
+              <SelectItem key={c.slug} value={c.slug}>
+                <ChannelChip name={c.name} color={c.logoColor} />
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>

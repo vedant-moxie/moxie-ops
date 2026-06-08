@@ -20,6 +20,10 @@ export const CHANNELS: ChannelConfig[] = [
   { slug: "instamart", name: "Instamart", source: "INSTAMART", logoColor: "#fc8019", hasUpload: false },
   { slug: "zepto", name: "Zepto", source: "ZEPTO", logoColor: "#7e3aed", hasUpload: false },
   { slug: "nykaa", name: "Nykaa", source: "NYKAA", logoColor: "#fc2779", hasUpload: false },
+  { slug: "tira", name: "Tira", source: "TIRA", logoColor: "#E8552D", hasUpload: false },
+  { slug: "myntra", name: "Myntra", source: "MYNTRA", logoColor: "#FF3F6C", hasUpload: false },
+  { slug: "reliance", name: "Reliance", source: "RELIANCE", logoColor: "#0C831F", hasUpload: false },
+  { slug: "amazon-now", name: "Amazon Now", source: "AMAZON_NOW", logoColor: "#146EB4", hasUpload: false },
 ];
 
 export function getChannel(slug: string): ChannelConfig | undefined {
