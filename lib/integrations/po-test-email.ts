@@ -1,7 +1,7 @@
 import "server-only";
 import nodemailer from "nodemailer";
 import { env, requireEnv } from "@/lib/env";
-import { nextEmailRefNumber } from "@/lib/services/email-ref-counter";
+import { nextEmailRef, getSeries } from "@/lib/services/email-ref-counter";
 import { getPoEmailRecipients } from "@/lib/services/app-settings";
 
 export interface PoPreparationEmailResult {
@@ -100,9 +100,12 @@ export async function sendPoPreparationEmail(data: PoEmailData): Promise<PoPrepa
   const toStr = toList.join(", ");
   const ccStr = ccList.join(", ");
 
-  // Assign and persist the next reference number for this send
-  const refNum = data.refNumber ?? (await nextEmailRefNumber());
-  const subject = `${env.PO_EMAIL_REF_PREFIX}${refNum}`;
+  // Assign the next reference (atomic, distinct per concurrent send). The prefix is
+  // the editable series prefix from the Counter, not the env default.
+  const subject =
+    data.refNumber != null
+      ? `${(await getSeries()).prefix}${data.refNumber}`
+      : (await nextEmailRef()).ref;
 
   const transport = nodemailer.createTransport({
     host: "smtp.gmail.com",

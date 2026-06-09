@@ -23,7 +23,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const result = await allocateAndEmailPo(
       params.id,
       { allocations },
-      actor.label,
+      actor,
       acknowledge ?? false,
     );
 

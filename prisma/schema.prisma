@@ -87,6 +87,12 @@ model PurchaseOrder {
   opsNotes              String?
   approvedBy            String?
   approvedAt            DateTime?
+  // Multi-user allocation lock: who is currently working this PO. Acquired when a
+  // user opens it to allocate; released on send / cancel / TTL expiry. The atomic
+  // claim check at allocation time is what prevents two people double-allocating.
+  claimedById           String?
+  claimedByLabel        String?
+  claimedAt             DateTime?
   rawEmailBody          String?   @db.Text
   rawEmailSubject       String?
   rawData               Json? // full original source fields (e.g. all Blinkit PO columns)
@@ -106,6 +112,17 @@ model PurchaseOrder {
   @@index([status])
   @@index([source])
   @@index([createdAt])
+  @@index([claimedById])
+}
+
+/// Atomic named counters (e.g. the PO email reference series "MB - 26/27 - 1457").
+/// `value` is incremented in a single UPDATE … RETURNING so concurrent allocators
+/// never get duplicate numbers. `prefix` is the editable series prefix.
+model Counter {
+  key       String   @id // e.g. "po_email_ref"
+  prefix    String   @default("")
+  value     Int      @default(0)
+  updatedAt DateTime @updatedAt
 }
 
 enum PoStatus {

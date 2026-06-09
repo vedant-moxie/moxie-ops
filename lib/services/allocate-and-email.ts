@@ -8,6 +8,7 @@ import { resolveDispatchFromGstins } from "@/lib/services/po-documents-helpers";
 import { resolveInternalSku } from "@/lib/services/sku-resolver";
 import { getLocationRecipients } from "@/lib/services/app-settings";
 import { validatePoTaxables } from "@/lib/services/taxable-validation";
+import { claimPo, PoClaimedError } from "@/lib/services/po-claim";
 
 const FACILITY_KEYS = [
   "facilityname", "facility_name", "facility", "warehouse",
@@ -62,9 +63,10 @@ export interface AllocateResult {
 export async function allocateAndEmailPo(
   poId: string,
   opts: AllocateOptions,
-  actorLabel = "system",
+  actor: { id: string; label: string } = { id: "system", label: "system" },
   acknowledgeMismatch = false,
 ): Promise<AllocateResult> {
+  const actorLabel = actor.label;
   // Resolve allocations: for full mode, fetch line items first
   let allocations: { skuId: string; approvedQty: number }[];
   if (opts.full) {
@@ -84,6 +86,12 @@ export async function allocateAndEmailPo(
 
   // Persist in a transaction
   await prisma.$transaction(async (tx) => {
+    // Double-allocation guard: atomically (re)assert the claim INSIDE the txn. If
+    // another user holds a fresh claim, this throws and the whole txn rolls back —
+    // so two people hitting send can never both allocate the same PO.
+    const claim = await claimPo(poId, actor, tx);
+    if (!claim.ok) throw new PoClaimedError(claim.claimedByLabel);
+
     for (const a of allocations) {
       await tx.poLineItem.updateMany({
         where: { poId, skuId: a.skuId },
@@ -92,7 +100,8 @@ export async function allocateAndEmailPo(
     }
     await tx.purchaseOrder.update({
       where: { id: poId },
-      data: { status: "ALLOCATED" },
+      // Allocation committed → release the claim (it's left the queue / re-openable).
+      data: { status: "ALLOCATED", approvedBy: actorLabel, approvedAt: new Date(), claimedById: null, claimedByLabel: null, claimedAt: null },
     });
     await writeAudit({
       tx,

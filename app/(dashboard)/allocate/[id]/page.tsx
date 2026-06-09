@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { AlertTriangle, ArrowLeft } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Lock } from "lucide-react";
 import { Topbar } from "@/components/layout/topbar";
 import { Card, CardContent } from "@/components/ui/card";
 import { ChannelChip } from "@/components/shared/channel-chip";
@@ -8,6 +8,8 @@ import { StatusBadge } from "@/components/orders/status-badge";
 import { PoAllocator } from "@/components/allocation/po-allocator";
 import { getPoForAllocation } from "@/lib/data/queries";
 import { validatePoTaxables } from "@/lib/services/taxable-validation";
+import { currentActor } from "@/lib/auth";
+import { isClaimedByOther } from "@/lib/services/po-claim";
 import { formatINR, formatDate } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +17,9 @@ export const dynamic = "force-dynamic";
 export default async function AllocatePoPage({ params }: { params: { id: string } }) {
   const po = await getPoForAllocation(params.id);
   if (!po) notFound();
+
+  const actor = await currentActor();
+  const lockedByOther = isClaimedByOther(po, actor.id);
 
   const receivedBySku: Record<string, number> = {};
   for (const l of po.grnRecord?.lineItems ?? []) receivedBySku[l.skuId] = l.receivedQty;
@@ -30,6 +35,20 @@ export default async function AllocatePoPage({ params }: { params: { id: string 
         <Link href="/allocate" className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
           <ArrowLeft className="h-4 w-4" /> Back to allocation
         </Link>
+
+        {lockedByOther && (
+          <div className="mb-4 flex items-start gap-3 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/40">
+            <Lock className="mt-0.5 h-4 w-4 shrink-0 text-slate-600 dark:text-slate-300" />
+            <div className="text-sm">
+              <span className="font-semibold text-slate-800 dark:text-slate-200">
+                Being allocated by {po.claimedByLabel ?? "another user"}
+              </span>
+              <span className="ml-1.5 text-slate-600 dark:text-slate-400">
+                This PO is locked while they work on it (auto-unlocks after inactivity). It&apos;s read-only for you.
+              </span>
+            </div>
+          </div>
+        )}
 
         {taxValidation.hasUnmappedSku && (
           <div className="mb-4 flex items-start gap-3 rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 dark:border-rose-700 dark:bg-rose-950/30">
@@ -88,6 +107,7 @@ export default async function AllocatePoPage({ params }: { params: { id: string 
           })}
           receivedBySku={receivedBySku}
           hasTaxableMismatch={taxValidation.hasTaxableMismatch}
+          lockedByOther={lockedByOther}
         />
       </main>
     </>

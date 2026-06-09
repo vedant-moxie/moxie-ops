@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
         const { emailMessageId, mismatchWithheld } = await allocateAndEmailPo(
           poId,
           { full: true, excludeSkuIds: removals?.[poId] ?? [] },
-          actor.label,
+          actor,
           acknowledge ?? false,
         );
         results.push({ poId, ok: true, emailMessageId, mismatchWithheld });

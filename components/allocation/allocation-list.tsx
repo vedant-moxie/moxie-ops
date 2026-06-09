@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowRight, ClipboardCheck, SendHorizonal, Trash2, Undo2 } from "lucide-react";
+import { AlertTriangle, ArrowRight, ClipboardCheck, SendHorizonal, Trash2, Undo2, Lock } from "lucide-react";
 import type { PoStatus } from "@prisma/client";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -41,6 +41,8 @@ export interface AllocRow {
   hasUnmappedSku: boolean;
   unmappedSkus: { skuId: string; channelSkuCode: string | null; name: string }[];
   priceMismatches: { skuId: string; channelSkuCode: string | null; name: string; expected: number | null; actual: number | null }[];
+  lockedByOther: boolean;
+  claimedByLabel: string | null;
 }
 
 export function AllocationList({ rows }: { rows: AllocRow[] }) {
@@ -90,27 +92,30 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
 
   const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
 
+  // Only POs not locked by someone else are selectable for bulk allocation.
+  const selectable = useMemo(() => filtered.filter((r) => !r.lockedByOther), [filtered]);
   const allFilteredSelected =
-    filtered.length > 0 && filtered.every((r) => selected.has(r.id));
-  const someFilteredSelected = filtered.some((r) => selected.has(r.id));
+    selectable.length > 0 && selectable.every((r) => selected.has(r.id));
+  const someFilteredSelected = selectable.some((r) => selected.has(r.id));
 
   function toggleAll() {
     if (allFilteredSelected) {
       setSelected((prev) => {
         const next = new Set(prev);
-        filtered.forEach((r) => next.delete(r.id));
+        selectable.forEach((r) => next.delete(r.id));
         return next;
       });
     } else {
       setSelected((prev) => {
         const next = new Set(prev);
-        filtered.forEach((r) => next.add(r.id));
+        selectable.forEach((r) => next.add(r.id));
         return next;
       });
     }
   }
 
   function toggleRow(id: string) {
+    if (rowById.get(id)?.lockedByOther) return;
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -267,10 +272,11 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
             const prog = r.orderedUnits > 0 ? (r.allocatedUnits / r.orderedUnits) * 100 : 0;
             const isSelected = selected.has(r.id);
             return (
-              <TableRow key={r.id} className={cn("group", isSelected && "bg-muted/40")}>
+              <TableRow key={r.id} className={cn("group", isSelected && "bg-muted/40", r.lockedByOther && "opacity-60")}>
                 <TableCell>
                   <Checkbox
                     checked={isSelected}
+                    disabled={r.lockedByOther}
                     onCheckedChange={() => toggleRow(r.id)}
                     aria-label={`Select PO ${r.channelPoNumber ?? r.id}`}
                   />
@@ -279,6 +285,15 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
                 <TableCell className="font-medium">
                   <div className="flex items-center gap-1.5">
                     {r.channelPoNumber}
+                    {r.lockedByOther && (
+                      <span
+                        className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold bg-slate-200 text-slate-700 dark:bg-slate-700/60 dark:text-slate-200"
+                        title={`Being allocated by ${r.claimedByLabel ?? "another user"}`}
+                      >
+                        <Lock className="h-2.5 w-2.5" />
+                        {r.claimedByLabel ?? "Locked"}
+                      </span>
+                    )}
                     {r.hasTaxableMismatch && (
                       <span
                         className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
@@ -313,11 +328,17 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
                 </TableCell>
                 <TableCell><StatusBadge status={r.status} /></TableCell>
                 <TableCell className="text-right">
-                  <Button size="sm" variant="outline" asChild>
-                    <Link href={`/allocate/${r.id}`}>
-                      Open <ArrowRight className="h-3.5 w-3.5" />
-                    </Link>
-                  </Button>
+                  {r.lockedByOther ? (
+                    <Button size="sm" variant="outline" disabled className="gap-1">
+                      <Lock className="h-3.5 w-3.5" /> Locked
+                    </Button>
+                  ) : (
+                    <Button size="sm" variant="outline" asChild>
+                      <Link href={`/allocate/${r.id}`}>
+                        Open <ArrowRight className="h-3.5 w-3.5" />
+                      </Link>
+                    </Button>
+                  )}
                 </TableCell>
               </TableRow>
             );

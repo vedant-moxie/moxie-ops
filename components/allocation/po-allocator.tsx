@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { AlertTriangle, Loader2, Wand2, PackageCheck, Mail, Trash2, Undo2 } from "lucide-react";
@@ -27,13 +27,39 @@ export function PoAllocator({
   lines,
   receivedBySku,
   hasTaxableMismatch = false,
+  lockedByOther = false,
 }: {
   poId: string;
   lines: Line[];
   receivedBySku: Record<string, number>;
   hasTaxableMismatch?: boolean;
+  lockedByOther?: boolean;
 }) {
   const router = useRouter();
+  // Locked = another user holds the claim. Starts from the server's view, and the
+  // claim-on-mount below upgrades it to true if someone grabbed it between SSR & mount.
+  const [locked, setLocked] = useState(lockedByOther);
+
+  // Acquire the claim when this page mounts (so others see it locked); release it on
+  // unmount/navigation. The atomic server gate is the real guard — this is the UX.
+  useEffect(() => {
+    if (lockedByOther) return;
+    let active = true;
+    fetch(`/api/pos/${poId}/claim`, { method: "POST" })
+      .then((r) => r.json())
+      .then((j) => {
+        if (active && j?.success && j.data?.ok === false) {
+          setLocked(true);
+          toast.warning(`This PO is being allocated by ${j.data.claimedByLabel ?? "another user"}.`);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+      // Best-effort release; keepalive lets it complete during navigation.
+      fetch(`/api/pos/${poId}/claim`, { method: "DELETE", keepalive: true }).catch(() => {});
+    };
+  }, [poId, lockedByOther]);
   const [alloc, setAlloc] = useState<Record<string, number>>(() =>
     Object.fromEntries(lines.map((l) => [l.skuId, l.approvedQty ?? l.requestedQty ?? 0])),
   );
@@ -172,7 +198,7 @@ export function PoAllocator({
                     <input
                       type="number"
                       min={0}
-                      disabled={isRemoved}
+                      disabled={isRemoved || locked}
                       value={isRemoved ? "" : rawInputs[l.skuId] ?? ""}
                       onChange={(e) => set(l.skuId, e.target.value)}
                       onBlur={() =>
@@ -188,6 +214,7 @@ export function PoAllocator({
                     <Button
                       variant="ghost"
                       size="sm"
+                      disabled={locked}
                       className={cn("h-8 gap-1 px-2", isRemoved ? "text-muted-foreground" : "text-rose-600 hover:text-rose-700")}
                       onClick={() => toggleRemove(l.skuId)}
                       title={isRemoved ? "Restore this item" : "Remove this item from the allocation & email"}
@@ -206,7 +233,7 @@ export function PoAllocator({
         <Button variant="outline" onClick={() => router.push("/allocate")} disabled={saving}>Cancel</Button>
         <Button
           onClick={() => hasTaxableMismatch && !confirmSend ? setConfirmSend(true) : save()}
-          disabled={saving || totalAlloc === 0}
+          disabled={saving || totalAlloc === 0 || locked}
           className={hasTaxableMismatch && !confirmSend ? "gap-2 bg-amber-600 hover:bg-amber-700 text-white border-0" : "gap-2"}
         >
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : hasTaxableMismatch && !confirmSend ? <AlertTriangle className="h-4 w-4" /> : <Mail className="h-4 w-4" />}

@@ -2,6 +2,8 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { validatePoTaxables } from "@/lib/services/taxable-validation";
 import { computeFillRates } from "@/lib/services/fill-rate";
+import { currentActor } from "@/lib/auth";
+import { isClaimedByOther } from "@/lib/services/po-claim";
 
 const DAY = 86_400_000;
 
@@ -102,6 +104,7 @@ export async function getAllocationData() {
 
 /** Lightweight list of POs to allocate (open / partially received). */
 export async function getAllocationList() {
+  const actor = await currentActor();
   const pos = await prisma.purchaseOrder.findMany({
     where: { status: { in: ["PENDING_REVIEW", "PRIORITISED", "ALLOCATED", "GRN_RECEIVED"] } },
     orderBy: [{ poDate: "desc" }, { createdAt: "desc" }],
@@ -112,6 +115,9 @@ export async function getAllocationList() {
       poDate: true,
       totalRequestedValue: true,
       rawData: true,
+      claimedById: true,
+      claimedByLabel: true,
+      claimedAt: true,
       channel: { select: { name: true, logoColor: true } },
       lineItems: {
         select: {
@@ -169,6 +175,9 @@ export async function getAllocationList() {
       hasUnmappedSku: taxResult.hasUnmappedSku,
       unmappedSkus,
       priceMismatches,
+      // Allocation lock: is another user actively working this PO?
+      lockedByOther: isClaimedByOther(p, actor.id),
+      claimedByLabel: p.claimedByLabel,
     };
   });
 }
@@ -184,6 +193,9 @@ export async function getPoForAllocation(id: string) {
       requestedDeliveryDate: true,
       totalRequestedValue: true,
       rawData: true,
+      claimedById: true,
+      claimedByLabel: true,
+      claimedAt: true,
       channel: { select: { name: true, logoColor: true, tier: true } },
       lineItems: {
         orderBy: { requestedQty: "desc" },
