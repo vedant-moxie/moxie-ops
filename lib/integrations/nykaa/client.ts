@@ -24,21 +24,16 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 /**
  * Build the POST body for the Nykaa PO endpoint from an optional template.
  * Substitutes {since} {until} {page} {pageSize} {offset}. Quote-stripping
- * variants ('"{page}"') emit bare integers. Falls back to a minimal default
- * shape when no template is configured.
+ * variants ('"{page}"') emit bare integers. Falls back to the confirmed default
+ * shape ({"page": <1-based>}) when no template is configured.
  */
 function renderNykaaBody(
   template: string | undefined,
   vars: { since: string; until: string; page: number; pageSize: number; offset: number },
 ): Record<string, unknown> {
   if (!template) {
-    return {
-      startDate: vars.since,
-      endDate: vars.until,
-      page: vars.page,
-      pageSize: vars.pageSize,
-      offset: vars.offset,
-    };
+    // Nykaa's listing pages are 1-based and the page size is server-fixed at 10.
+    return { page: vars.page + 1 };
   }
   const filled = template
     .replaceAll('"{page}"', String(vars.page + 1))
@@ -73,29 +68,6 @@ function extractRecords(payload: unknown, depth = 0): RawNykaaPo[] {
     }
   }
   return [];
-}
-
-/** Best-effort total-pages / has-next detection from a paged envelope. */
-function hasNextPage(payload: unknown, page: number): boolean {
-  if (!isRecord(payload)) return false;
-  const dig = (obj: Record<string, unknown>): boolean | null => {
-    for (const k of ["hasNext", "hasMore", "has_next", "hasNextPage"]) {
-      if (typeof obj[k] === "boolean") return obj[k] as boolean;
-    }
-    const totalPages = obj.totalPages ?? obj.total_pages ?? obj.pageCount;
-    if (typeof totalPages === "number") return page + 1 < totalPages;
-    return null;
-  };
-  const top = dig(payload);
-  if (top != null) return top;
-  for (const k of ["data", "result", "page", "pagination", "meta"]) {
-    const nested = payload[k];
-    if (isRecord(nested)) {
-      const r = dig(nested);
-      if (r != null) return r;
-    }
-  }
-  return false;
 }
 
 export class NykaaClient {
@@ -135,36 +107,43 @@ export class NykaaClient {
   }
 
   /**
-   * Fetch all PO records in [since, until] from the configured grid endpoint,
-   * paging until exhausted. Returns raw records to be mapped by the ingest.
+   * Fetch PO records issued within [since, until] from the seller-portal listing,
+   * paging until the window is exhausted. Returns raw records mapped by ingest.
    *
-   * The exact path/params come from the captured grid XHR (NYKAA_PO_LIST_PATH);
-   * the nykka-simulate bundle only exposed the sales-report download endpoint,
-   * so the PO-grid endpoint must be captured from seller.nykaa.com (Copy as cURL)
-   * and set here. The client + pagination are ready; only the endpoint + filter
-   * param names are missing. Supports both GET (query-string) and POST (JSON body)
-   * shapes via NYKAA_PO_LIST_METHOD.
+   * Nykaa's listing (POST /seller-portal/api/v1/purchase-order/listing) is sorted
+   * newest-first with a server-fixed page size of 10 and 1-based `page` paging;
+   * the response envelope is { data: { data: [...], count: { all, … } } } with no
+   * per-page hasNext flag. We therefore page forward and STOP as soon as a page's
+   * issue_date drops below `since` (rolling window) — this bounds the work to the
+   * recent window instead of crawling all ~56 pages, and keeps us under the
+   * portal's 20-requests/minute limit (a small inter-page delay reinforces that).
+   *
+   * Supports GET (query-string) and POST (JSON body) via NYKAA_PO_LIST_METHOD;
+   * the body/path come from NYKAA_PO_LIST_PATH / NYKAA_PO_LIST_BODY (with defaults).
    */
   async listPurchaseOrders(q: PoListQuery): Promise<RawNykaaPo[]> {
     const tpl = env.NYKAA_PO_LIST_PATH;
     if (!tpl) {
-      throw new NykaaAPIError(
-        "NYKAA_PO_LIST_PATH not configured — capture the PO-grid XHR (Copy as cURL) from " +
-          "seller.nykaa.com and set the endpoint path. Auth (2captcha + OTP) and pagination " +
-          "are ready; only the endpoint + filter param names are missing.",
-      );
+      throw new NykaaAPIError("NYKAA_PO_LIST_PATH not configured.");
     }
-    const pageSize = q.pageSize ?? 100;
+    const PAGE_SIZE = 10; // Nykaa's server-fixed page size
+    const MAX_PAGES = 120; // safety cap (well above ~56 pages for the full history)
+    const INTER_PAGE_DELAY_MS = 400; // stay comfortably under 20 req/min
     const all: RawNykaaPo[] = [];
     const usesPost = env.NYKAA_PO_LIST_METHOD === "POST" || /__POST__/.test(tpl);
     const basePath = tpl.replace("__POST__", "");
 
-    for (let page = 0; page < 200; page++) {
+    const issueDateOf = (po: RawNykaaPo): string | null => {
+      const v = po.issue_date ?? po.issueDate ?? po.poDate ?? po.createDate;
+      return typeof v === "string" ? v.slice(0, 10) : null;
+    };
+
+    for (let page = 0; page < MAX_PAGES; page++) {
       const filled = basePath
         .replaceAll("{since}", q.since)
         .replaceAll("{until}", q.until)
         .replaceAll("{page}", String(page))
-        .replaceAll("{pageSize}", String(pageSize));
+        .replaceAll("{pageSize}", String(PAGE_SIZE));
 
       let res: Response;
       if (usesPost) {
@@ -172,8 +151,8 @@ export class NykaaClient {
           since: q.since,
           until: q.until,
           page,
-          pageSize,
-          offset: page * pageSize,
+          pageSize: PAGE_SIZE,
+          offset: page * PAGE_SIZE,
         });
         res = await this.req(filled, { method: "POST", body: JSON.stringify(body) });
       } else {
@@ -184,11 +163,23 @@ export class NykaaClient {
       }
       const json = (await res.json().catch(() => null)) as unknown;
       const records = extractRecords(json);
-      all.push(...records);
-      if (records.length === 0 || records.length < pageSize) {
-        if (!hasNextPage(json, page)) break;
+      if (records.length === 0) break;
+
+      // Keep rows inside the [since, until] window; detect when we've paged past it.
+      let pagedPastWindow = false;
+      for (const po of records) {
+        const d = issueDateOf(po);
+        if (d && d < q.since) {
+          pagedPastWindow = true; // newest-first → everything after this is older too
+          continue;
+        }
+        if (d && d > q.until) continue; // future-dated (rare) — skip but keep paging
+        all.push(po);
       }
-      if (!hasNextPage(json, page) && records.length < pageSize) break;
+
+      if (pagedPastWindow) break; // reached POs older than the window
+      if (records.length < PAGE_SIZE) break; // last page
+      await new Promise((r) => setTimeout(r, INTER_PAGE_DELAY_MS));
     }
     return all;
   }

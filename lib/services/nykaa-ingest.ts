@@ -32,8 +32,10 @@ function mapNykaaStatus(status: string, totalReceivedQty: number, totalQty: numb
   }
   if (s.includes("dispatch") || s.includes("shipped") || s.includes("intransit") || s.includes("in_transit")) return "DISPATCHED";
   if (s.includes("approved") || s.includes("confirmed") || s.includes("acknowledged")) return "APPROVED";
-  if (s.includes("complet") || s.includes("delivered") || s === "grn_received") return "GRN_RECEIVED";
-  return "PENDING_REVIEW";
+  // Nykaa listing statuses: "Open" (→ PENDING_REVIEW), "Received"/"Closed"/"Completed"
+  // (→ GRN_RECEIVED, since the listing is header-only with no per-SKU received qty).
+  if (s.includes("receiv") || s.includes("complet") || s.includes("delivered") || s.includes("closed") || s === "grn_received") return "GRN_RECEIVED";
+  return "PENDING_REVIEW"; // "Open"
 }
 
 function epochOrIso(v: unknown): Date | undefined {
@@ -117,23 +119,26 @@ export async function ingestLiveNykaaPOs(
   const skuCache = new Map<string, string>();
 
   for (const po of pos) {
+    // Nykaa listing fields are snake/lowercase: pocode, total_quantity, issue_date,
+    // expiry_date, total_amount, status. Tolerate camelCase too for forward-compat.
     const poNo = String(
-      po.poNumber ?? po.po_number ?? po.poId ?? po.po_id ?? po.id ?? po.purchaseOrderNumber ?? "",
+      po.pocode ?? po.poCode ?? po.poNumber ?? po.po_number ?? po.poId ?? po.po_id ?? po.id ?? "",
     ).trim();
     if (!poNo) {
       warnings.push(`Skipped Nykaa PO with no identifier`);
       continue;
     }
 
-    const poDate = epochOrIso(po.poDate ?? po.po_date ?? po.createdAt ?? po.created_at ?? po.orderDate);
+    const poDate = epochOrIso(po.issue_date ?? po.issueDate ?? po.poDate ?? po.po_date ?? po.createDate ?? po.createdAt);
     const expiryDate = epochOrIso(
-      po.expiryDate ?? po.expiry_date ?? po.deliveryDate ?? po.delivery_date ?? po.appointmentDate,
+      po.expiry_date ?? po.expiryDate ?? po.deliveryDate ?? po.delivery_date ?? po.appointmentDate,
     );
     const totalQty = Math.max(
       0,
-      Math.round(Number(po.totalQty ?? po.total_qty ?? po.quantity ?? po.totalQuantity ?? 0) || 0),
+      Math.round(Number(po.total_quantity ?? po.totalQty ?? po.total_qty ?? po.quantity ?? po.totalQuantity ?? 0) || 0),
     );
-    const totalValue = Number(po.poValue ?? po.totalValue ?? po.total_value ?? po.value ?? po.amount ?? 0) || null;
+    const totalValue =
+      Number(po.total_amount ?? po.poValue ?? po.totalValue ?? po.total_value ?? po.value ?? po.amount ?? 0) || null;
     const statusRaw = String(po.status ?? po.poStatus ?? po.po_status ?? po.state ?? "");
 
     type LineSpec = {

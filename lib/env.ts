@@ -155,9 +155,10 @@ const schema = z.object({
   // `x-access-token` header (NOT Authorization Bearer) plus `x-domain`.
   // Shared 2captcha key — required for Nykaa login (its reCAPTCHA gate).
   TWOCAPTCHA_API_KEY: z.string().optional(),
-  // Seller-portal backend host (auth + data). spbackend.nyk00-int.network is the
-  // confirmed backend for seller.nykaa.com.
-  NYKAA_BASE_URL: z.string().default("https://spbackend.nyk00-int.network"),
+  // Seller-portal backend host (auth + data). api-seller.nykaa.com is the public
+  // Akamai-fronted host that serves both /auth/* and /purchase-order/* (confirmed
+  // live; the bundle's spbackend.nyk00-int.network is internal-only / unreachable).
+  NYKAA_BASE_URL: z.string().default("https://api-seller.nykaa.com"),
   NYKAA_DOMAIN: z.string().default("Beauty"), // x-domain header value
   NYKAA_LOGIN_EMAIL: z.string().optional(), // Nykaa portal account; OTP is sent for this user
   NYKAA_START_DATE: z.string().default("2026-06-01"), // backfill floor
@@ -166,17 +167,17 @@ const schema = z.object({
   NYKAA_LOGIN_PAGE: z.string().default("https://seller.nykaa.com/login"),
   // Fallback token from a browser-captured request when OTP/captcha login is blocked.
   NYKAA_PORTAL_TOKEN: z.string().optional(),
-  // PO-listing endpoint. UNSET by default — the nykka-simulate bundle only exposed
-  // the sales-report download endpoint, so the PO-grid endpoint must be captured
-  // from seller.nykaa.com (Copy as cURL). May be a FULL URL. Supports {since}
-  // {until} {page} {pageSize} placeholders.
-  NYKAA_PO_LIST_PATH: z.string().optional(),
-  NYKAA_PO_LIST_METHOD: z.enum(["GET", "POST"]).default("GET"),
+  // PO-listing endpoint (confirmed: POST, newest-first, 10/page via {"page":N}).
+  // Full URL on the data host. The {page} placeholder is filled per request.
+  NYKAA_PO_LIST_PATH: z.string().default("https://api-seller.nykaa.com/seller-portal/api/v1/purchase-order/listing"),
+  NYKAA_PO_LIST_METHOD: z.enum(["GET", "POST"]).default("POST"),
   // POST body template (JSON). Placeholders {since} {until} {page} {pageSize} {offset}.
-  NYKAA_PO_LIST_BODY: z.string().optional(),
+  // '"{page}"' emits a bare 1-based integer (Nykaa pages are 1-based, size fixed at 10).
+  NYKAA_PO_LIST_BODY: z.string().default('{"page":"{page}"}'),
   NYKAA_PORTAL_COOKIE: z.string().optional(), // optional raw Cookie header
   NYKAA_PO_DETAIL_PATH: z.string().optional(), // optional per-PO line-items endpoint (use {poId})
-  // Background auto-sync — DISABLED by default until NYKAA_PO_LIST_PATH is captured.
+  // Background auto-sync — DISABLED by default until Nykaa creds (TWOCAPTCHA_API_KEY +
+  // login/OTP, or NYKAA_PORTAL_TOKEN) are configured. Flip to "true" once set.
   NYKAA_AUTO_SYNC: z.string().default("false"),
   NYKAA_SYNC_INTERVAL_HOURS: z.coerce.number().positive().default(3),
   // OTP inbox over IMAP (Gmail app password). Defaults to OTP_IMAP_HOST.
