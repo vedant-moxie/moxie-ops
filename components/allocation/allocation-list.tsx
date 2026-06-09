@@ -135,19 +135,24 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
       const res = await fetch("/api/pos/allocate-bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ poIds }),
+        // executeBulkSend only runs after the mismatch dialog is confirmed (or when
+        // there's no mismatch), so it's safe to acknowledge the server price gate.
+        body: JSON.stringify({ poIds, acknowledge: true }),
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.error ?? "Bulk allocation failed");
 
-      const results: { poId: string; ok: boolean; error?: string }[] = json.data.results;
+      const results: { poId: string; ok: boolean; mismatchWithheld?: boolean; error?: string }[] = json.data.results;
       const succeeded = results.filter((r) => r.ok).length;
       const failed = results.filter((r) => !r.ok).length;
+      const withheld = results.filter((r) => r.mismatchWithheld).length;
 
       setProgress({ done: poIds.length, total: poIds.length });
 
-      if (failed === 0) {
+      if (failed === 0 && withheld === 0) {
         toast.success(`Sent ${succeeded} PO${succeeded !== 1 ? "s" : ""}`);
+      } else if (withheld > 0) {
+        toast.warning(`Sent ${succeeded - withheld} · ${withheld} email(s) withheld for price mismatch${failed ? ` · ${failed} failed` : ""}`);
       } else {
         toast.warning(`Sent ${succeeded} PO${succeeded !== 1 ? "s" : ""} · ${failed} failed`);
       }

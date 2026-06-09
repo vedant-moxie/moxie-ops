@@ -67,11 +67,19 @@ export function PoAllocator({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           allocations: lines.map((l) => ({ skuId: l.skuId, approvedQty: alloc[l.skuId] ?? 0 })),
+          // The confirm-send click acknowledges any price mismatch (server gate).
+          acknowledge: confirmSend,
         }),
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.error);
-      toast.success(`Allocation saved · ${formatNumber(totalAlloc)} units · email sent to abhishek@moxiebeauty.in`);
+      if (json.data?.mismatchWithheld) {
+        toast.warning(
+          `Allocation saved · email withheld — ${json.data.mismatches?.length ?? 0} price mismatch(es). Review and confirm to send.`,
+        );
+      } else {
+        toast.success(`Allocation saved · ${formatNumber(totalAlloc)} units · email sent to abhishek@moxiebeauty.in`);
+      }
       router.push("/allocate");
       router.refresh();
     } catch (e) {

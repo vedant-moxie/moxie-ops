@@ -7,6 +7,7 @@ import { getPoDocuments, extractGstinFromPdf } from "@/lib/services/po-documents
 import { resolveDispatchFromGstins } from "@/lib/services/po-documents-helpers";
 import { resolveInternalSku } from "@/lib/services/sku-resolver";
 import { getLocationRecipients } from "@/lib/services/app-settings";
+import { validatePoTaxables } from "@/lib/services/taxable-validation";
 
 const FACILITY_KEYS = [
   "facilityname", "facility_name", "facility", "warehouse",
@@ -42,12 +43,26 @@ export type AllocateOptions =
  * Pass `{ allocations: [...] }` for an explicit per-SKU breakdown (per-PO path).
  *
  * Email failure is non-fatal — the allocation is already committed when it throws.
+ *
+ * Price-mismatch gate: before sending, the PO's line prices are validated against
+ * the SKU-master rate sheet. If any line's channel price differs and the caller
+ * did NOT set `acknowledgeMismatch`, the allocation is still saved but the email
+ * is WITHHELD (and audited) — so a PO with wrong prices is never auto-emailed.
  */
+export interface AllocateResult {
+  emailMessageId: string | null;
+  /** True when the email was held back because of an unacknowledged price mismatch. */
+  mismatchWithheld?: boolean;
+  /** The offending lines (when withheld), for the caller to surface. */
+  mismatches?: { sku: string; channelSkuCode: string | null; expected: number | null; actual: number | null; reason: string }[];
+}
+
 export async function allocateAndEmailPo(
   poId: string,
   opts: AllocateOptions,
   actorLabel = "system",
-): Promise<{ emailMessageId: string | null }> {
+  acknowledgeMismatch = false,
+): Promise<AllocateResult> {
   // Resolve allocations: for full mode, fetch line items first
   let allocations: { skuId: string; approvedQty: number }[];
   if (opts.full) {
@@ -94,9 +109,11 @@ export async function allocateAndEmailPo(
         channel: { select: { name: true } },
         lineItems: {
           select: {
+            id: true,
             skuId: true,
             approvedQty: true,
             requestedQty: true,
+            unitPrice: true,
             channelSkuCode: true,
             rawData: true,
             sku: { select: { internalCode: true } },
@@ -104,6 +121,26 @@ export async function allocateAndEmailPo(
         },
       },
     });
+
+    // Price-mismatch gate: validate channel prices vs the SKU-master rate sheet.
+    // Withhold the email (allocation already saved) unless the caller acknowledged.
+    if (po && !acknowledgeMismatch) {
+      const tax = validatePoTaxables(po);
+      if (tax.hasTaxableMismatch) {
+        const mismatches = tax.lines
+          .filter((l) => l.mismatch)
+          .map((l) => ({ sku: l.sku, channelSkuCode: l.channelSkuCode, expected: l.expected, actual: l.actual, reason: l.reason }));
+        await writeAudit({
+          entityType: "PurchaseOrder",
+          entityId: poId,
+          action: "EMAIL_WITHHELD_PRICE_MISMATCH",
+          performedBy: actorLabel,
+          changes: { mismatchCount: mismatches.length, mismatches },
+        });
+        console.warn(`[allocate-and-email] email withheld for PO ${poId}: ${mismatches.length} price mismatch(es)`);
+        return { emailMessageId: null, mismatchWithheld: true, mismatches };
+      }
+    }
 
     if (po) {
       const allocMap = Object.fromEntries(allocations.map((a) => [a.skuId, a.approvedQty]));

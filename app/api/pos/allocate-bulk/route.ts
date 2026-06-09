@@ -9,12 +9,17 @@ export const maxDuration = 300;
 
 const schema = z.object({
   poIds: z.array(z.string()).min(1),
+  // Set true to send emails even when channel prices differ from the rate sheet
+  // (the bulk UI sets this after the operator confirms the mismatch dialog).
+  acknowledge: z.boolean().optional(),
 });
 
 export interface BulkAllocateResult {
   poId: string;
   ok: boolean;
   emailMessageId?: string | null;
+  /** Allocation saved but email held back due to an unacknowledged price mismatch. */
+  mismatchWithheld?: boolean;
   error?: string;
 }
 
@@ -26,17 +31,18 @@ export interface BulkAllocateResult {
 export async function POST(req: NextRequest) {
   return handler("POST /api/pos/allocate-bulk", async () => {
     const actor = await currentActor();
-    const { poIds } = schema.parse(await req.json());
+    const { poIds, acknowledge } = schema.parse(await req.json());
 
     const results: BulkAllocateResult[] = [];
     for (const poId of poIds) {
       try {
-        const { emailMessageId } = await allocateAndEmailPo(
+        const { emailMessageId, mismatchWithheld } = await allocateAndEmailPo(
           poId,
           { full: true },
           actor.label,
+          acknowledge ?? false,
         );
-        results.push({ poId, ok: true, emailMessageId });
+        results.push({ poId, ok: true, emailMessageId, mismatchWithheld });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
         console.error(`[allocate-bulk] PO ${poId} failed:`, err);
