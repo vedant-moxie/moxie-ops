@@ -149,6 +149,40 @@ const schema = z.object({
   INSTAMART_AUTO_SYNC: z.string().default("true"), // "false" to disable
   INSTAMART_SYNC_INTERVAL_HOURS: z.coerce.number().positive().default(3),
 
+  // ── Nykaa seller-portal live scraping (mirrors the Zepto block) ──
+  // Auth uses 2captcha (reCAPTCHA) + OTP: signIn triggers an OTP email, then
+  // verifyTwoFaCode returns the token. The token is sent on data calls as the
+  // `x-access-token` header (NOT Authorization Bearer) plus `x-domain`.
+  // Shared 2captcha key — required for Nykaa login (its reCAPTCHA gate).
+  TWOCAPTCHA_API_KEY: z.string().optional(),
+  // Seller-portal backend host (auth + data). spbackend.nyk00-int.network is the
+  // confirmed backend for seller.nykaa.com.
+  NYKAA_BASE_URL: z.string().default("https://spbackend.nyk00-int.network"),
+  NYKAA_DOMAIN: z.string().default("Beauty"), // x-domain header value
+  NYKAA_LOGIN_EMAIL: z.string().optional(), // Nykaa portal account; OTP is sent for this user
+  NYKAA_START_DATE: z.string().default("2026-06-01"), // backfill floor
+  // reCAPTCHA sitekey + login page URL for the 2captcha solver (captured defaults).
+  NYKAA_RECAPTCHA_SITEKEY: z.string().default("6LezEMUUAAAAAD5e03qpKu8apgqrINORZnxu8x_N"),
+  NYKAA_LOGIN_PAGE: z.string().default("https://seller.nykaa.com/login"),
+  // Fallback token from a browser-captured request when OTP/captcha login is blocked.
+  NYKAA_PORTAL_TOKEN: z.string().optional(),
+  // PO-listing endpoint. UNSET by default — the nykka-simulate bundle only exposed
+  // the sales-report download endpoint, so the PO-grid endpoint must be captured
+  // from seller.nykaa.com (Copy as cURL). May be a FULL URL. Supports {since}
+  // {until} {page} {pageSize} placeholders.
+  NYKAA_PO_LIST_PATH: z.string().optional(),
+  NYKAA_PO_LIST_METHOD: z.enum(["GET", "POST"]).default("GET"),
+  // POST body template (JSON). Placeholders {since} {until} {page} {pageSize} {offset}.
+  NYKAA_PO_LIST_BODY: z.string().optional(),
+  NYKAA_PORTAL_COOKIE: z.string().optional(), // optional raw Cookie header
+  NYKAA_PO_DETAIL_PATH: z.string().optional(), // optional per-PO line-items endpoint (use {poId})
+  // Background auto-sync — DISABLED by default until NYKAA_PO_LIST_PATH is captured.
+  NYKAA_AUTO_SYNC: z.string().default("false"),
+  NYKAA_SYNC_INTERVAL_HOURS: z.coerce.number().positive().default(3),
+  // OTP inbox over IMAP (Gmail app password). Defaults to OTP_IMAP_HOST.
+  NYKAA_OTP_EMAIL: z.string().optional(), // defaults to NYKAA_LOGIN_EMAIL
+  NYKAA_OTP_APP_PASSWORD: z.string().optional(),
+
   // Test PO email (Gmail SMTP, FROM amritya@moxiebeauty.in)
   PO_TEST_EMAIL_SMTP_USER: z.string().default("amritya@moxiebeauty.in"),
   PO_TEST_EMAIL_SMTP_PASS: z.string().optional(), // Gmail app password (strip spaces)
