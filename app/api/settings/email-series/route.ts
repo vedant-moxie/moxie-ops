@@ -10,9 +10,10 @@ const schema = z
   .object({
     prefix: z.string().max(64).optional(),
     nextNumber: z.number().int().positive().optional(),
+    padWidth: z.number().int().min(0).max(12).optional(),
   })
-  .refine((v) => v.prefix !== undefined || v.nextNumber !== undefined, {
-    message: "Provide prefix and/or nextNumber",
+  .refine((v) => v.prefix !== undefined || v.nextNumber !== undefined || v.padWidth !== undefined, {
+    message: "Provide prefix, nextNumber and/or padWidth",
   });
 
 /** Current series config + the next number that will be issued. */

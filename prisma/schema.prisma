@@ -122,6 +122,9 @@ model Counter {
   key       String   @id // e.g. "po_email_ref"
   prefix    String   @default("")
   value     Int      @default(0)
+  // Zero-pad width for the rendered number: 0 = no padding, 4 = "0001". The number
+  // never truncates — once it exceeds the width it just prints in full.
+  padWidth  Int      @default(0)
   updatedAt DateTime @updatedAt
 }
 

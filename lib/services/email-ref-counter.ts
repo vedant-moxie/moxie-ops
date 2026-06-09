@@ -6,10 +6,19 @@ const LEGACY_PROVIDER = "po_email_ref_counter"; // pre-migration IntegrationToke
 
 export interface SeriesState {
   prefix: string;
+  /** Zero-pad width (0 = none). "0001" → 4. */
+  padWidth: number;
   /** The last number issued. */
   current: number;
   /** The number the next allocation email will use. */
   next: number;
+  /** The next number rendered with padding, e.g. "0001". */
+  nextFormatted: string;
+}
+
+/** Render a number with zero-padding (never truncates beyond the width). */
+export function formatRefNumber(value: number, padWidth: number): string {
+  return padWidth > 0 ? String(value).padStart(padWidth, "0") : String(value);
 }
 
 /**
@@ -44,28 +53,43 @@ export async function nextEmailRef(): Promise<{ prefix: string; value: number; r
   const row = await prisma.counter.update({
     where: { key: KEY },
     data: { value: { increment: 1 } },
-    select: { prefix: true, value: true },
+    select: { prefix: true, value: true, padWidth: true },
   });
-  return { prefix: row.prefix, value: row.value, ref: `${row.prefix}${row.value}` };
+  return { prefix: row.prefix, value: row.value, ref: `${row.prefix}${formatRefNumber(row.value, row.padWidth)}` };
 }
 
 /** Current series config + the next number that will be issued. */
 export async function getSeries(): Promise<SeriesState> {
   await ensureSeeded();
   const row = await prisma.counter.findUniqueOrThrow({ where: { key: KEY } });
-  return { prefix: row.prefix, current: row.value, next: row.value + 1 };
+  const next = row.value + 1;
+  return {
+    prefix: row.prefix,
+    padWidth: row.padWidth,
+    current: row.value,
+    next,
+    nextFormatted: formatRefNumber(next, row.padWidth),
+  };
 }
 
 /**
- * Update the series prefix and/or set the next number to issue (e.g. jump to 1500).
+ * Update the series prefix, the next number to issue, and/or the zero-pad width.
  * `nextNumber` is the value the NEXT email will use, so we store value = next - 1.
+ * `padWidth` controls leading zeros ("0001" → 4); pass 0 for no padding.
  */
-export async function setSeries(opts: { prefix?: string; nextNumber?: number }): Promise<SeriesState> {
+export async function setSeries(opts: {
+  prefix?: string;
+  nextNumber?: number;
+  padWidth?: number;
+}): Promise<SeriesState> {
   await ensureSeeded();
-  const data: { prefix?: string; value?: number } = {};
+  const data: { prefix?: string; value?: number; padWidth?: number } = {};
   if (opts.prefix !== undefined) data.prefix = opts.prefix;
   if (opts.nextNumber !== undefined && Number.isFinite(opts.nextNumber)) {
     data.value = Math.max(0, Math.floor(opts.nextNumber) - 1);
+  }
+  if (opts.padWidth !== undefined && Number.isFinite(opts.padWidth)) {
+    data.padWidth = Math.max(0, Math.min(12, Math.floor(opts.padWidth)));
   }
   await prisma.counter.update({ where: { key: KEY }, data });
   return getSeries();
