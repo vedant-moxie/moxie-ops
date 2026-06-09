@@ -80,7 +80,7 @@ export async function syncNykaa(
       pos,
       async (po) => {
         if (findLineArray(po)) return;
-        const poId = String(po.poNumber ?? po.po_number ?? po.poId ?? po.id ?? "");
+        const poId = String(po.pocode ?? po.poCode ?? po.poNumber ?? po.po_number ?? po.poId ?? po.id ?? "");
         if (!poId) return;
         try {
           const items = await withTimeout(client.fetchPoLineItems(poId), PO_FETCH_TIMEOUT_MS);

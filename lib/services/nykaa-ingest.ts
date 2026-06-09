@@ -2,6 +2,7 @@ import "server-only";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAudit } from "@/lib/services/audit";
+import { resolveInternalSku } from "@/lib/services/sku-resolver";
 
 export interface IngestSummary {
   source: "nykaa";
@@ -92,6 +93,13 @@ async function resolveOrCreateNykaaSku(
   const existing = await prisma.sku.findUnique({ where: { internalCode: code } });
   if (existing) {
     cache.set(code, existing.id);
+    // Backfill a real product name when the master only has a placeholder (name ==
+    // internalCode or blank) and Nykaa gave us a proper one — improves the PO view.
+    const hasRealName = name && name !== code && name.length > code.length;
+    const placeholder = !existing.name || existing.name === existing.internalCode;
+    if (hasRealName && placeholder) {
+      await prisma.sku.update({ where: { id: existing.id }, data: { name } });
+    }
     return { id: existing.id, created: false };
   }
   const created = await prisma.sku.create({ data: { internalCode: code, name, category: "Nykaa", uom: "unit" } });
@@ -142,7 +150,8 @@ export async function ingestLiveNykaaPOs(
     const statusRaw = String(po.status ?? po.poStatus ?? po.po_status ?? po.state ?? "");
 
     type LineSpec = {
-      code: string;
+      code: string; // internal Moxie SKU code (for SKU master linkage + rate sheet)
+      channelCode: string; // Nykaa's own skucode (for display / channelSkuCode)
       name: string;
       qty: number;
       receivedQty: number;
@@ -153,33 +162,39 @@ export async function ingestLiveNykaaPOs(
 
     const apiLines = extractNykaaLines(po);
     if (apiLines && apiLines.length > 0) {
+      // getPODetails items: { skucode, skuname, uom, poqty, receivedqty, unitcost, mrp, … }.
       lineSpecs = apiLines.map((line, i) => {
         const rawCode = String(
-          line.skuCode ?? line.sku_code ?? line.itemCode ?? line.item_code ?? line.productCode ?? line.product_code ?? line.styleId ?? line.fsn ?? "",
+          line.skucode ?? line.skuCode ?? line.sku_code ?? line.vendorskucode ?? line.itemCode ?? line.item_code ?? line.productCode ?? line.product_code ?? line.styleId ?? line.fsn ?? "",
         ).trim();
         const rawName = String(
-          line.skuName ?? line.sku_name ?? line.itemName ?? line.item_name ?? line.productName ?? line.product_name ?? line.title ?? "",
+          line.skuname ?? line.skuName ?? line.sku_name ?? line.itemName ?? line.item_name ?? line.productName ?? line.product_name ?? line.title ?? "",
         ).trim();
-        const code =
+        const channelCode =
           rawCode ||
           (rawName ? "NYK-" + rawName.toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 24).replace(/^-|-$/g, "") : "") ||
           `NYK-${poNo.replace(/[^A-Z0-9]/gi, "").slice(0, 12)}-L${i}`;
+        // Map Nykaa's skucode (e.g. MOXIE00000001) to our internal code (GCS200) so the
+        // line links to the SKU master and keys into the channel rate sheet for the
+        // price-mismatch check. Falls back to the channel code when unmapped.
+        const code = resolveInternalSku("NYKAA", channelCode);
         const name = rawName || code;
         const qty = Math.max(
           0,
-          Math.round(Number(line.quantity ?? line.qty ?? line.orderedQty ?? line.ordered_qty ?? line.poQty ?? line.po_qty ?? 0) || 0),
+          Math.round(Number(line.poqty ?? line.quantity ?? line.qty ?? line.orderedQty ?? line.ordered_qty ?? line.poQty ?? line.po_qty ?? 0) || 0),
         );
-        const grnRaw = line.grnQty ?? line.grn_qty ?? line.receivedQty ?? line.received_qty ?? null;
-        const receivedQty = grnRaw != null ? Math.max(0, Math.round(Number(grnRaw) || 0)) : 0;
-        const unitPrice = Number(line.unitPrice ?? line.unit_price ?? line.price ?? line.costPrice ?? null) || null;
-        return { code, name, qty, receivedQty, unitPrice, rawData: line as Prisma.InputJsonValue };
+        const grnRaw = line.receivedqty ?? line.grnQty ?? line.grn_qty ?? line.receivedQty ?? line.received_qty ?? null;
+        const receivedQty = grnRaw != null && String(grnRaw).trim() !== "" ? Math.max(0, Math.round(Number(grnRaw) || 0)) : 0;
+        // unitcost is Nykaa's per-unit taxable price (what we validate against our rate sheet).
+        const unitPrice = Number(line.unitcost ?? line.unitPrice ?? line.unit_price ?? line.price ?? line.costPrice ?? null) || null;
+        return { code, channelCode, name, qty, receivedQty, unitPrice, rawData: line as Prisma.InputJsonValue };
       });
     } else {
       const summaryCode = `NYK-SUMM-${poNo.replace(/[^A-Z0-9]/gi, "").slice(0, 16)}`;
       const summaryName = `Nykaa PO ${poNo}${totalQty > 0 ? ` (${totalQty} units)` : ""}`;
       const unitPrice = totalValue && totalQty > 0 ? Math.round((totalValue / totalQty) * 100) / 100 : null;
       lineSpecs = [
-        { code: summaryCode, name: summaryName, qty: Math.max(1, totalQty), receivedQty: 0, unitPrice, rawData: po as Prisma.InputJsonValue },
+        { code: summaryCode, channelCode: summaryCode, name: summaryName, qty: Math.max(1, totalQty), receivedQty: 0, unitPrice, rawData: po as Prisma.InputJsonValue },
       ];
       warnings.push(`PO ${poNo}: API returned no line items — 1 summary line created (qty=${totalQty}, value=${totalValue ?? "?"}).`);
     }
@@ -200,7 +215,7 @@ export async function ingestLiveNykaaPOs(
       if (created) skusCreated++;
       resolvedLines.push({
         skuId,
-        channelSkuCode: spec.code,
+        channelSkuCode: spec.channelCode,
         requestedQty: spec.qty,
         receivedQty: spec.receivedQty,
         unitPrice: spec.unitPrice,

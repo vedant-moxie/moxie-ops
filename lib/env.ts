@@ -175,7 +175,11 @@ const schema = z.object({
   // '"{page}"' emits a bare 1-based integer (Nykaa pages are 1-based, size fixed at 10).
   NYKAA_PO_LIST_BODY: z.string().default('{"page":"{page}"}'),
   NYKAA_PORTAL_COOKIE: z.string().optional(), // optional raw Cookie header
-  NYKAA_PO_DETAIL_PATH: z.string().optional(), // optional per-PO line-items endpoint (use {poId})
+  // Per-PO line items (GET getPODetails?poCode={poId}) → data.poDetails.items[] with
+  // skucode/skuname/poqty/receivedqty/unitcost/mrp. {poId} is the pocode.
+  NYKAA_PO_DETAIL_PATH: z
+    .string()
+    .default("https://api-seller.nykaa.com/seller-portal/api/v1/purchase-order/getPODetails?poCode={poId}"),
   // Background auto-sync — DISABLED by default until Nykaa creds (TWOCAPTCHA_API_KEY +
   // login/OTP, or NYKAA_PORTAL_TOKEN) are configured. Flip to "true" once set.
   NYKAA_AUTO_SYNC: z.string().default("false"),
