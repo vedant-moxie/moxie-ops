@@ -28,14 +28,14 @@ async function triggerSync(ifStale: boolean): Promise<void> {
 /**
  * Start the background Nykaa auto-sync. Idempotent (guards against HMR/double
  * registration). Disabled by default (NYKAA_AUTO_SYNC defaults to "false") until
- * the PO-grid endpoint (NYKAA_PO_LIST_PATH) has been captured — otherwise every
- * tick would fail with a "not configured" error. Set NYKAA_AUTO_SYNC=true once
- * the endpoint is set. Re-scrapes every NYKAA_SYNC_INTERVAL_HOURS, plus a startup
- * catch-up that only runs if the data is already older than that window.
+ * Nykaa creds are configured (TWOCAPTCHA_API_KEY + login/OTP, or a portal token) —
+ * otherwise every tick would fail at login. Set NYKAA_AUTO_SYNC=true once creds
+ * are set. Re-scrapes every NYKAA_SYNC_INTERVAL_HOURS, plus a startup catch-up
+ * that only runs if the data is already older than that window.
  */
 export function startNykaaAutoSync(): void {
   if (env.NYKAA_AUTO_SYNC !== "true") {
-    console.log("[nykaa:auto] disabled (set NYKAA_AUTO_SYNC=true after capturing NYKAA_PO_LIST_PATH)");
+    console.log("[nykaa:auto] disabled (set NYKAA_AUTO_SYNC=true once Nykaa creds are configured)");
     return;
   }
   if (g.__nykaaTimer) return;
