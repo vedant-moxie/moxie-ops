@@ -1,4 +1,5 @@
 import { EXPECTED_TAXABLE_VALUE } from "@/lib/sku-master-data";
+import { isSkuMapped } from "@/lib/services/sku-resolver";
 
 export interface TaxableLineResult {
   lineId: string;
@@ -8,12 +9,16 @@ export interface TaxableLineResult {
   actual: number | null;
   confidence: "high" | "low";
   mismatch: boolean;
+  /** True when the channel SKU isn't in our master mapping (new/unknown SKU). */
+  unmapped: boolean;
   reason: string;
 }
 
 export interface TaxableValidationResult {
   lines: TaxableLineResult[];
   hasTaxableMismatch: boolean;
+  /** True when any line is an unmapped/new SKU not in our master. */
+  hasUnmappedSku: boolean;
 }
 
 // Tolerance: flag if |expected - actual| > TOLERANCE_PCT * expected OR > TOLERANCE_ABS.
@@ -125,6 +130,16 @@ type PoWithLines = {
 export function validatePoTaxables(po: PoWithLines): TaxableValidationResult {
   const channelExpected = EXPECTED_TAXABLE_VALUE[channelKey(po.channel.name)] ?? {};
 
+  // Self-calibrate unmapped detection. We only flag a line as a new/unknown SKU when
+  // the channel's mapping is demonstrably AUTHORITATIVE for this PO — i.e. it already
+  // maps the large majority (≥80%) of the lines. That way:
+  //  • Nykaa (maps ~all lines) → a rare miss is flagged as genuinely new. ✓
+  //  • Zepto (map keyed by UUIDs we don't store → maps 0%) → never flagged. ✓
+  //  • Blinkit (sparse/incomplete map → maps a minority) → not treated as authoritative,
+  //    so its many already-known-but-unmapped SKUs don't flood the review. ✓
+  const mappedCount = po.lineItems.filter((li) => isSkuMapped(po.channel.name, li.channelSkuCode)).length;
+  const mapIsAuthoritative = po.lineItems.length > 0 && mappedCount / po.lineItems.length >= 0.8;
+
   const lines: TaxableLineResult[] = po.lineItems.map((li) => {
     const raw = (typeof li.rawData === "object" && li.rawData !== null && !Array.isArray(li.rawData)
       ? (li.rawData as Record<string, unknown>)
@@ -132,6 +147,7 @@ export function validatePoTaxables(po: PoWithLines): TaxableValidationResult {
 
     const internalSku = li.sku.internalCode;
     const expected: number | null = channelExpected[internalSku] ?? null;
+    const unmapped = mapIsAuthoritative && !isSkuMapped(po.channel.name, li.channelSkuCode);
     const { value: actual, confidence } = extractActual(
       po.channel.name,
       raw,
@@ -142,7 +158,10 @@ export function validatePoTaxables(po: PoWithLines): TaxableValidationResult {
     let mismatch = false;
     let reason = "";
 
-    if (expected == null) {
+    if (unmapped) {
+      // New/unknown SKU — there's nothing to price-check against; flag as unmapped.
+      reason = `Unmapped SKU "${li.channelSkuCode}" — not in the ${po.channel.name} master mapping (new/unknown SKU)`;
+    } else if (expected == null) {
       reason = "No expected value in SKU master";
     } else if (actual == null) {
       reason = "Could not determine actual taxable value";
@@ -163,6 +182,7 @@ export function validatePoTaxables(po: PoWithLines): TaxableValidationResult {
       actual,
       confidence,
       mismatch,
+      unmapped,
       reason,
     };
   });
@@ -170,5 +190,6 @@ export function validatePoTaxables(po: PoWithLines): TaxableValidationResult {
   return {
     lines,
     hasTaxableMismatch: lines.some((l) => l.mismatch),
+    hasUnmappedSku: lines.some((l) => l.unmapped),
   };
 }

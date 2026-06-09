@@ -13,17 +13,35 @@ type ChannelSource = string;
  * source matches case-insensitively against BLINKIT / ZEPTO / INSTAMART / NYKAA.
  * Falls back to channelCode if no mapping exists (never blanks the column).
  */
-export function resolveInternalSku(source: ChannelSource, channelCode: string): string {
+function mapFor(source: ChannelSource): Record<string, string> | null {
   const s = source.toUpperCase();
-  let map: Record<string, string> | null = null;
+  if (s.includes("BLINKIT")) return BLINKIT_TO_INTERNAL;
+  if (s.includes("ZEPTO")) return ZEPTO_TO_INTERNAL;
+  if (s.includes("INSTAMART")) return INSTAMART_TO_INTERNAL;
+  if (s.includes("NYKAA")) return NYKAA_TO_INTERNAL;
+  return null;
+}
 
-  if (s.includes("BLINKIT")) map = BLINKIT_TO_INTERNAL;
-  else if (s.includes("ZEPTO")) map = ZEPTO_TO_INTERNAL;
-  else if (s.includes("INSTAMART")) map = INSTAMART_TO_INTERNAL;
-  else if (s.includes("NYKAA")) map = NYKAA_TO_INTERNAL;
-
+export function resolveInternalSku(source: ChannelSource, channelCode: string): string {
+  const map = mapFor(source);
   if (!map) return channelCode;
   return map[channelCode] ?? channelCode;
+}
+
+/**
+ * True when `channelCode` is a known SKU for this channel — i.e. present in the
+ * channel→internal mapping (so it maps to a real Moxie SKU). `false` means the
+ * channel ordered a SKU we haven't mapped yet (a new/unknown SKU) — surfaced as a
+ * flag during allocation so it can be mapped or removed before sending.
+ *
+ * Channels without a mapping table (or a blank code) return `true` so we never
+ * false-flag manually-entered / already-internal codes.
+ */
+export function isSkuMapped(source: ChannelSource, channelCode: string | null | undefined): boolean {
+  if (!channelCode) return true;
+  const map = mapFor(source);
+  if (!map) return true;
+  return Object.prototype.hasOwnProperty.call(map, channelCode);
 }
 
 const ALL_CHANNEL_MAPS: Record<string, string>[] = [

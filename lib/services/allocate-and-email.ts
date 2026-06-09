@@ -32,7 +32,9 @@ function extractRaw(obj: unknown, keys: string[]): string {
 }
 
 export type AllocateOptions =
-  | { full: true; allocations?: never }
+  // Full mode: allocate every line to its requestedQty, EXCEPT skuIds in `excludeSkuIds`
+  // (removed during review — they get approvedQty 0 and are left out of the email).
+  | { full: true; excludeSkuIds?: string[]; allocations?: never }
   | { full?: false; allocations: { skuId: string; approvedQty: number }[] };
 
 /**
@@ -70,7 +72,12 @@ export async function allocateAndEmailPo(
       where: { id: poId },
       select: { lineItems: { select: { skuId: true, requestedQty: true } } },
     });
-    allocations = poPre.lineItems.map((l) => ({ skuId: l.skuId, approvedQty: l.requestedQty }));
+    const excluded = new Set(opts.excludeSkuIds ?? []);
+    // Removed SKUs get approvedQty 0 → excluded from the prep email (qty>0 filter).
+    allocations = poPre.lineItems.map((l) => ({
+      skuId: l.skuId,
+      approvedQty: excluded.has(l.skuId) ? 0 : l.requestedQty,
+    }));
   } else {
     allocations = opts.allocations;
   }

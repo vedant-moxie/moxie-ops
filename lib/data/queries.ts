@@ -116,12 +116,13 @@ export async function getAllocationList() {
       lineItems: {
         select: {
           id: true,
+          skuId: true,
           requestedQty: true,
           approvedQty: true,
           channelSkuCode: true,
           unitPrice: true,
           rawData: true,
-          sku: { select: { internalCode: true } },
+          sku: { select: { internalCode: true, name: true } },
         },
       },
     },
@@ -131,6 +132,27 @@ export async function getAllocationList() {
     const allocated = p.lineItems.reduce((s, l) => s + (l.approvedQty ?? 0), 0);
     const raw = (p.rawData as Record<string, string> | null) ?? {};
     const taxResult = validatePoTaxables(p);
+    // Join validation results back to skuId/name for the bulk review modal.
+    const lineById = new Map(p.lineItems.map((l) => [l.id, l]));
+    const unmappedSkus = taxResult.lines
+      .filter((l) => l.unmapped)
+      .map((l) => {
+        const li = lineById.get(l.lineId);
+        return { skuId: li?.skuId ?? "", channelSkuCode: l.channelSkuCode, name: li?.sku.name ?? l.sku };
+      })
+      .filter((l) => l.skuId);
+    const priceMismatches = taxResult.lines
+      .filter((l) => l.mismatch)
+      .map((l) => {
+        const li = lineById.get(l.lineId);
+        return {
+          skuId: li?.skuId ?? "",
+          channelSkuCode: l.channelSkuCode,
+          name: li?.sku.name ?? l.sku,
+          expected: l.expected,
+          actual: l.actual,
+        };
+      });
     return {
       id: p.id,
       channelPoNumber: p.channelPoNumber,
@@ -143,7 +165,10 @@ export async function getAllocationList() {
       orderedUnits: ordered,
       allocatedUnits: allocated,
       hasTaxableMismatch: taxResult.hasTaxableMismatch,
-      taxMismatchCount: taxResult.lines.filter((l) => l.mismatch).length,
+      taxMismatchCount: priceMismatches.length,
+      hasUnmappedSku: taxResult.hasUnmappedSku,
+      unmappedSkus,
+      priceMismatches,
     };
   });
 }

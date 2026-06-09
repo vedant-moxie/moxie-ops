@@ -4,12 +4,13 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowRight, ClipboardCheck, SendHorizonal } from "lucide-react";
+import { AlertTriangle, ArrowRight, ClipboardCheck, SendHorizonal, Trash2, Undo2 } from "lucide-react";
 import type { PoStatus } from "@prisma/client";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { SelectItem } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ChannelChip } from "@/components/shared/channel-chip";
@@ -37,6 +38,9 @@ export interface AllocRow {
   allocatedUnits: number;
   hasTaxableMismatch: boolean;
   taxMismatchCount: number;
+  hasUnmappedSku: boolean;
+  unmappedSkus: { skuId: string; channelSkuCode: string | null; name: string }[];
+  priceMismatches: { skuId: string; channelSkuCode: string | null; name: string; expected: number | null; actual: number | null }[];
 }
 
 export function AllocationList({ rows }: { rows: AllocRow[] }) {
@@ -118,15 +122,19 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
   function requestBulkSend() {
     const poIds = Array.from(selected);
     if (poIds.length === 0) return;
-    const mismatched = poIds.filter((id) => rowById.get(id)?.hasTaxableMismatch);
-    if (mismatched.length > 0) {
+    // Open the review step when any selected PO has a price mismatch or an unmapped SKU.
+    const flagged = poIds.some((id) => {
+      const r = rowById.get(id);
+      return r?.hasTaxableMismatch || r?.hasUnmappedSku;
+    });
+    if (flagged) {
       setPendingConfirm(poIds);
     } else {
-      void executeBulkSend(poIds);
+      void executeBulkSend(poIds, {});
     }
   }
 
-  async function executeBulkSend(poIds: string[]) {
+  async function executeBulkSend(poIds: string[], removals: Record<string, string[]>) {
     setPendingConfirm(null);
     setSending(true);
     setProgress({ done: 0, total: poIds.length });
@@ -135,9 +143,9 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
       const res = await fetch("/api/pos/allocate-bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // executeBulkSend only runs after the mismatch dialog is confirmed (or when
-        // there's no mismatch), so it's safe to acknowledge the server price gate.
-        body: JSON.stringify({ poIds, acknowledge: true }),
+        // executeBulkSend only runs after the review step is confirmed (or when
+        // nothing is flagged), so it's safe to acknowledge the server price gate.
+        body: JSON.stringify({ poIds, acknowledge: true, removals }),
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.error ?? "Bulk allocation failed");
@@ -280,6 +288,15 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
                         Price
                       </span>
                     )}
+                    {r.hasUnmappedSku && (
+                      <span
+                        className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300"
+                        title={`${r.unmappedSkus.length} unmapped/new SKU${r.unmappedSkus.length !== 1 ? "s" : ""} not in the ${r.channel.name} master`}
+                      >
+                        <AlertTriangle className="h-2.5 w-2.5" />
+                        New SKU
+                      </span>
+                    )}
                   </div>
                 </TableCell>
                 <TableCell className="max-w-[200px] truncate text-muted-foreground">{r.facility ?? "—"}</TableCell>
@@ -334,12 +351,12 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
         </div>
       )}
 
-      {/* Taxable mismatch confirmation dialog */}
+      {/* Review step: accept/remove unmapped SKUs + price-mismatch info, then send */}
       {pendingConfirm && (
-        <MismatchConfirmDialog
+        <ReviewDialog
           poIds={pendingConfirm}
           rowById={rowById}
-          onConfirm={() => executeBulkSend(pendingConfirm)}
+          onConfirm={(removals) => executeBulkSend(pendingConfirm, removals)}
           onCancel={() => setPendingConfirm(null)}
         />
       )}
@@ -347,7 +364,16 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
   );
 }
 
-function MismatchConfirmDialog({
+/**
+ * Bulk review step. Lists every flagged PO before sending:
+ *  • Unmapped/new SKUs → operator can Accept (keep) or Remove (exclude from
+ *    allocation + email).
+ *  • Price mismatches → info only (no accept/reject) — surfaced so the operator
+ *    is aware before the email goes out.
+ * "Mark reviewed" gates the green "Save allocation & send email" button. On send,
+ * the removed SKU ids are sent per-PO so those lines are allocated 0 / left out.
+ */
+function ReviewDialog({
   poIds,
   rowById,
   onConfirm,
@@ -355,47 +381,119 @@ function MismatchConfirmDialog({
 }: {
   poIds: string[];
   rowById: Map<string, AllocRow>;
-  onConfirm: () => void;
+  onConfirm: (removals: Record<string, string[]>) => void;
   onCancel: () => void;
 }) {
-  const mismatchedRows = poIds
+  const rows = poIds
     .map((id) => rowById.get(id))
-    .filter((r): r is AllocRow => r?.hasTaxableMismatch === true);
+    .filter((r): r is AllocRow => !!r && (r.hasUnmappedSku || r.hasTaxableMismatch));
+  const [removed, setRemoved] = useState<Set<string>>(new Set());
+  const [reviewed, setReviewed] = useState(false);
+
+  const toggle = (skuId: string) =>
+    setRemoved((prev) => {
+      const next = new Set(prev);
+      if (next.has(skuId)) next.delete(skuId);
+      else next.add(skuId);
+      return next;
+    });
+
+  function send() {
+    const removals: Record<string, string[]> = {};
+    for (const r of rows) {
+      const rem = r.unmappedSkus.filter((s) => removed.has(s.skuId)).map((s) => s.skuId);
+      if (rem.length) removals[r.id] = rem;
+    }
+    onConfirm(removals);
+  }
+
+  const unmappedTotal = rows.reduce((s, r) => s + r.unmappedSkus.length, 0);
+  const priceTotal = rows.reduce((s, r) => s + r.priceMismatches.length, 0);
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-lg rounded-xl border border-border bg-card shadow-2xl">
+      <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-border bg-card shadow-2xl">
         <div className="border-b border-border px-5 py-4">
           <div className="flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5 text-amber-500" />
-            <h2 className="text-base font-semibold">Taxable value mismatch detected</h2>
+            <ClipboardCheck className="h-5 w-5 text-foreground" />
+            <h2 className="text-base font-semibold">Review before sending · {rows.length} PO{rows.length !== 1 ? "s" : ""} flagged</h2>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            {mismatchedRows.length} of the {poIds.length} selected PO{poIds.length !== 1 ? "s" : ""} have line items
-            where the channel-reported taxable value differs from the SKU master. Review before sending.
+            {unmappedTotal > 0 && <>Accept or remove {unmappedTotal} unmapped SKU{unmappedTotal !== 1 ? "s" : ""}. </>}
+            {priceTotal > 0 && <>{priceTotal} price mismatch{priceTotal !== 1 ? "es" : ""} shown for info. </>}
+            Mark as reviewed to enable sending.
           </p>
         </div>
-        <div className="max-h-64 overflow-y-auto px-5 py-3 space-y-2">
-          {mismatchedRows.map((r) => (
-            <div key={r.id} className="flex items-center justify-between text-sm rounded-md border border-amber-200 bg-amber-50/60 dark:border-amber-800 dark:bg-amber-950/20 px-3 py-2">
-              <div>
-                <span className="font-medium">{r.channelPoNumber ?? r.id}</span>
-                <span className="ml-2 text-muted-foreground">{r.channel.name}</span>
+
+        <div className="flex-1 overflow-y-auto px-5 py-3 space-y-4">
+          {rows.map((r) => (
+            <div key={r.id} className="rounded-lg border border-border/70">
+              <div className="flex items-center justify-between border-b border-border/60 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <ChannelChip name={r.channel.name} color={r.channel.logoColor} />
+                  <span className="font-medium">{r.channelPoNumber ?? r.id}</span>
+                </div>
+                <span className="text-xs text-muted-foreground">{r.skuCount} SKUs</span>
               </div>
-              <span className="text-amber-700 dark:text-amber-400 text-xs font-medium">
-                {r.taxMismatchCount} line{r.taxMismatchCount !== 1 ? "s" : ""} differ
-              </span>
+
+              {/* Unmapped SKUs — accept / remove */}
+              {r.unmappedSkus.map((s) => {
+                const isRemoved = removed.has(s.skuId);
+                return (
+                  <div key={s.skuId} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                    <div className={cn("min-w-0", isRemoved && "opacity-50 line-through")}>
+                      <span className="font-mono text-xs text-rose-600 dark:text-rose-400">{s.channelSkuCode ?? s.skuId}</span>
+                      <span className="ml-2 truncate text-muted-foreground">{s.name}</span>
+                      <Badge variant="danger" className="ml-2 text-[10px]">New SKU</Badge>
+                    </div>
+                    <button
+                      onClick={() => toggle(s.skuId)}
+                      className={cn(
+                        "shrink-0 inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors",
+                        isRemoved
+                          ? "border-border text-muted-foreground hover:text-foreground"
+                          : "border-rose-300 text-rose-600 hover:bg-rose-50 dark:border-rose-800 dark:hover:bg-rose-950/30",
+                      )}
+                    >
+                      {isRemoved ? <><Undo2 className="h-3 w-3" /> Restore</> : <><Trash2 className="h-3 w-3" /> Remove</>}
+                    </button>
+                  </div>
+                );
+              })}
+
+              {/* Price mismatches — info only */}
+              {r.priceMismatches.map((s) => (
+                <div key={`p-${s.skuId}`} className="flex items-center justify-between gap-3 bg-amber-50/50 px-3 py-2 text-sm dark:bg-amber-950/10">
+                  <div className="min-w-0">
+                    <span className="font-mono text-xs">{s.channelSkuCode ?? s.skuId}</span>
+                    <span className="ml-2 truncate text-muted-foreground">{s.name}</span>
+                  </div>
+                  <span className="shrink-0 inline-flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400">
+                    <AlertTriangle className="h-3 w-3" />
+                    ₹{s.actual?.toFixed(2) ?? "?"} vs exp ₹{s.expected?.toFixed(2) ?? "?"}
+                  </span>
+                </div>
+              ))}
             </div>
           ))}
         </div>
-        <div className="flex items-center justify-end gap-3 border-t border-border px-5 py-4">
-          <Button variant="outline" onClick={onCancel}>
-            Cancel — go back
-          </Button>
-          <Button onClick={onConfirm} className="gap-2 bg-amber-600 hover:bg-amber-700 text-white border-0">
-            <SendHorizonal className="h-4 w-4" />
-            Send anyway ({poIds.length} PO{poIds.length !== 1 ? "s" : ""})
-          </Button>
+
+        <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-4">
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox checked={reviewed} onCheckedChange={(v) => setReviewed(v === true)} aria-label="Mark reviewed" />
+            I&apos;ve reviewed the flagged items
+          </label>
+          <div className="flex gap-3">
+            <Button variant="outline" onClick={onCancel}>Cancel</Button>
+            <Button
+              onClick={send}
+              disabled={!reviewed}
+              className={reviewed ? "gap-2 bg-success text-white hover:bg-success/90 border-0" : "gap-2"}
+            >
+              <SendHorizonal className="h-4 w-4" />
+              Save allocation &amp; send email ({poIds.length})
+            </Button>
+          </div>
         </div>
       </div>
     </div>

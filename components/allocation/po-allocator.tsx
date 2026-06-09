@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, Loader2, Wand2, PackageCheck, Mail } from "lucide-react";
+import { AlertTriangle, Loader2, Wand2, PackageCheck, Mail, Trash2, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -18,6 +19,7 @@ interface Line {
   approvedQty: number | null;
   rawData: Record<string, string> | null;
   sku: { internalCode: string; name: string; uom: string };
+  flag?: { mismatch: boolean; unmapped: boolean; reason: string } | null;
 }
 
 export function PoAllocator({
@@ -40,6 +42,17 @@ export function PoAllocator({
   );
   const [saving, setSaving] = useState(false);
   const [confirmSend, setConfirmSend] = useState(false);
+  // SKUs removed from this allocation (e.g. unmapped / not-for-sale) — excluded
+  // from the saved allocation and the prep email.
+  const [removed, setRemoved] = useState<Set<string>>(new Set());
+
+  const toggleRemove = (skuId: string) =>
+    setRemoved((prev) => {
+      const next = new Set(prev);
+      if (next.has(skuId)) next.delete(skuId);
+      else next.add(skuId);
+      return next;
+    });
 
   const set = (skuId: string, raw: string) => {
     setRawInputs((p) => ({ ...p, [skuId]: raw }));
@@ -57,7 +70,8 @@ export function PoAllocator({
   };
 
   const totalOrdered = lines.reduce((s, l) => s + l.requestedQty, 0);
-  const totalAlloc = lines.reduce((s, l) => s + (alloc[l.skuId] ?? 0), 0);
+  const totalAlloc = lines.reduce((s, l) => s + (removed.has(l.skuId) ? 0 : alloc[l.skuId] ?? 0), 0);
+  const removedCount = lines.filter((l) => removed.has(l.skuId)).length;
 
   async function save() {
     setSaving(true);
@@ -66,7 +80,11 @@ export function PoAllocator({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          allocations: lines.map((l) => ({ skuId: l.skuId, approvedQty: alloc[l.skuId] ?? 0 })),
+          // Removed lines are sent as 0 → excluded from the prep email.
+          allocations: lines.map((l) => ({
+            skuId: l.skuId,
+            approvedQty: removed.has(l.skuId) ? 0 : alloc[l.skuId] ?? 0,
+          })),
           // The confirm-send click acknowledges any price mismatch (server gate).
           acknowledge: confirmSend,
         }),
@@ -101,6 +119,9 @@ export function PoAllocator({
         <div className="ml-auto text-sm text-muted-foreground">
           Allocating <span className="font-semibold text-foreground nums">{formatNumber(totalAlloc)}</span> of{" "}
           <span className="nums">{formatNumber(totalOrdered)}</span> ordered units
+          {removedCount > 0 && (
+            <span className="ml-2 text-rose-600 dark:text-rose-400">· {removedCount} removed</span>
+          )}
         </div>
       </div>
 
@@ -114,20 +135,34 @@ export function PoAllocator({
               <TableHead className="text-right">Ordered</TableHead>
               <TableHead className="text-right">Received</TableHead>
               <TableHead className="text-right">Allocate</TableHead>
+              <TableHead className="text-right">Remove</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {lines.map((l) => {
               const received = receivedBySku[l.skuId];
               const val = alloc[l.skuId] ?? 0;
+              const isRemoved = removed.has(l.skuId);
               const tone =
                 val === 0 ? "border-border/60"
                   : val >= l.requestedQty ? "border-success"
                   : "border-warning";
               return (
-                <TableRow key={l.id}>
+                <TableRow key={l.id} className={cn(isRemoved && "opacity-50")}>
                   <TableCell className="font-mono text-xs">{l.channelSkuCode ?? l.sku.internalCode}</TableCell>
-                  <TableCell className="max-w-[320px]"><div className="truncate text-sm">{l.sku.name}</div></TableCell>
+                  <TableCell className="max-w-[320px]">
+                    <div className={cn("truncate text-sm", isRemoved && "line-through")}>{l.sku.name}</div>
+                    {l.flag?.unmapped && (
+                      <Badge variant="danger" className="mt-0.5 gap-1 text-[10px]">
+                        <AlertTriangle className="h-2.5 w-2.5" /> New SKU · not mapped
+                      </Badge>
+                    )}
+                    {l.flag?.mismatch && (
+                      <Badge variant="warning" className="mt-0.5 gap-1 text-[10px]" title={l.flag.reason}>
+                        <AlertTriangle className="h-2.5 w-2.5" /> Price mismatch
+                      </Badge>
+                    )}
+                  </TableCell>
                   <TableCell className="text-muted-foreground">{l.rawData?.uom_text ?? l.sku.uom}</TableCell>
                   <TableCell className="text-right nums font-medium">{l.requestedQty}</TableCell>
                   <TableCell className="text-right nums">
@@ -137,16 +172,28 @@ export function PoAllocator({
                     <input
                       type="number"
                       min={0}
-                      value={rawInputs[l.skuId] ?? ""}
+                      disabled={isRemoved}
+                      value={isRemoved ? "" : rawInputs[l.skuId] ?? ""}
                       onChange={(e) => set(l.skuId, e.target.value)}
                       onBlur={() =>
                         setRawInputs((p) => ({ ...p, [l.skuId]: String(alloc[l.skuId] ?? 0) }))
                       }
                       className={cn(
-                        "h-9 w-24 rounded-lg border bg-card px-2 text-right text-sm nums outline-none focus:ring-2 focus:ring-ring/40",
+                        "h-9 w-24 rounded-lg border bg-card px-2 text-right text-sm nums outline-none focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:bg-muted/40",
                         tone,
                       )}
                     />
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className={cn("h-8 gap-1 px-2", isRemoved ? "text-muted-foreground" : "text-rose-600 hover:text-rose-700")}
+                      onClick={() => toggleRemove(l.skuId)}
+                      title={isRemoved ? "Restore this item" : "Remove this item from the allocation & email"}
+                    >
+                      {isRemoved ? <><Undo2 className="h-3.5 w-3.5" /> Restore</> : <Trash2 className="h-3.5 w-3.5" />}
+                    </Button>
                   </TableCell>
                 </TableRow>
               );
@@ -159,7 +206,7 @@ export function PoAllocator({
         <Button variant="outline" onClick={() => router.push("/allocate")} disabled={saving}>Cancel</Button>
         <Button
           onClick={() => hasTaxableMismatch && !confirmSend ? setConfirmSend(true) : save()}
-          disabled={saving}
+          disabled={saving || totalAlloc === 0}
           className={hasTaxableMismatch && !confirmSend ? "gap-2 bg-amber-600 hover:bg-amber-700 text-white border-0" : "gap-2"}
         >
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : hasTaxableMismatch && !confirmSend ? <AlertTriangle className="h-4 w-4" /> : <Mail className="h-4 w-4" />}

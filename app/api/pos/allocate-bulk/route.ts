@@ -10,8 +10,11 @@ export const maxDuration = 300;
 const schema = z.object({
   poIds: z.array(z.string()).min(1),
   // Set true to send emails even when channel prices differ from the rate sheet
-  // (the bulk UI sets this after the operator confirms the mismatch dialog).
+  // (the bulk UI sets this after the operator confirms the review dialog).
   acknowledge: z.boolean().optional(),
+  // Per-PO SKU removals from the review step: { [poId]: skuId[] } → those lines are
+  // allocated 0 and left out of the email (e.g. unmapped/new SKUs we won't sell).
+  removals: z.record(z.string(), z.array(z.string())).optional(),
 });
 
 export interface BulkAllocateResult {
@@ -31,14 +34,14 @@ export interface BulkAllocateResult {
 export async function POST(req: NextRequest) {
   return handler("POST /api/pos/allocate-bulk", async () => {
     const actor = await currentActor();
-    const { poIds, acknowledge } = schema.parse(await req.json());
+    const { poIds, acknowledge, removals } = schema.parse(await req.json());
 
     const results: BulkAllocateResult[] = [];
     for (const poId of poIds) {
       try {
         const { emailMessageId, mismatchWithheld } = await allocateAndEmailPo(
           poId,
-          { full: true },
+          { full: true, excludeSkuIds: removals?.[poId] ?? [] },
           actor.label,
           acknowledge ?? false,
         );
