@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/table";
 import { prisma } from "@/lib/db";
 import { validatePoTaxables } from "@/lib/services/taxable-validation";
+import { computeFillRates } from "@/lib/services/fill-rate";
 import { cn, formatINR, formatDate, formatDateTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +42,21 @@ export default async function OrderDetailPage({ params }: { params: { id: string
   const dispatchedBySku = new Map(po.dispatchRecord?.lineItems.map((l) => [l.skuId, l.dispatchedQty]) ?? []);
   const receivedBySku = new Map(po.grnRecord?.lineItems.map((l) => [l.skuId, l.receivedQty]) ?? []);
 
+  // Gross (delivered ÷ ordered) + net (delivered ÷ assigned) fill rates.
+  // "assigned" = team allocation (approvedQty) or the channel's scraped ASN qty.
+  const fill = computeFillRates(
+    po.lineItems.map((l) => ({
+      skuId: l.skuId,
+      requestedQty: l.requestedQty,
+      approvedQty: l.approvedQty,
+      rawData: l.rawData,
+    })),
+    po.grnRecord?.lineItems ?? null,
+  );
+  const fillBySku = new Map(fill.perLine.map((l) => [l.skuId, l]));
+  // Once a PO has a GRN it's delivered & received — the allocate action no longer applies.
+  const isReceived = po.grnRecord != null;
+
   // Compute ordered-vs-received discrepancy breakdown for GRN section
   const grnVariances = po.grnRecord
     ? (() => {
@@ -64,14 +80,6 @@ export default async function OrderDetailPage({ params }: { params: { id: string
       })()
     : null;
 
-  const totalOrdered = po.lineItems.reduce((s, l) => s + l.requestedQty, 0);
-  const totalReceived = po.grnRecord
-    ? po.grnRecord.lineItems.reduce((s, l) => s + l.receivedQty, 0)
-    : null;
-  const fillRatePct =
-    totalOrdered > 0 && totalReceived != null
-      ? Math.round((totalReceived / totalOrdered) * 100)
-      : null;
   const grnIsPerfect = grnVariances != null && grnVariances.every((v) => v.variance === 0);
 
   return (
@@ -124,7 +132,7 @@ export default async function OrderDetailPage({ params }: { params: { id: string
               <div className="font-medium">{formatDate(po.requestedDeliveryDate)}</div>
             </div>
             <div className="ml-auto flex flex-wrap gap-2">
-              <ContextActions status={po.status} poId={po.id} />
+              <ContextActions status={po.status} poId={po.id} hasGrn={isReceived} />
             </div>
           </CardContent>
         </Card>
@@ -135,9 +143,11 @@ export default async function OrderDetailPage({ params }: { params: { id: string
             <Card>
               <CardHeader className="flex-row items-center justify-between space-y-0">
                 <CardTitle>Items · {po.lineItems.length}</CardTitle>
-                <Button variant="outline" size="sm" asChild>
-                  <Link href={`/allocate/${po.id}`}>Allocate this PO</Link>
-                </Button>
+                {!isReceived && (
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href={`/allocate/${po.id}`}>Allocate this PO</Link>
+                  </Button>
+                )}
               </CardHeader>
               <CardContent className="p-0">
                 <Table>
@@ -158,8 +168,15 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                       const raw = (li.rawData as Record<string, string> | null) ?? {};
                       const received = receivedBySku.get(li.skuId);
                       const ordered = li.requestedQty;
-                      const fillBase = li.approvedQty ?? received ?? null;
-                      const fillPct = ordered > 0 && fillBase != null ? (fillBase / ordered) * 100 : null;
+                      const lineFill = fillBySku.get(li.skuId);
+                      const assigned = lineFill?.assigned ?? null;
+                      // Delivered POs show gross fill (delivered ÷ ordered); pre-delivery POs
+                      // show allocation progress (assigned ÷ ordered).
+                      const fillPct = isReceived
+                        ? lineFill?.grossPct ?? null
+                        : assigned != null && ordered > 0
+                          ? (assigned / ordered) * 100
+                          : null;
                       const tone =
                         fillPct == null ? "text-muted-foreground"
                           : fillPct >= 100 ? "text-success"
@@ -177,7 +194,9 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                           <TableCell className="text-right nums">
                             {received != null ? received : <span className="text-muted-foreground">—</span>}
                           </TableCell>
-                          <TableCell className="text-right nums">{li.approvedQty ?? "—"}</TableCell>
+                          <TableCell className="text-right nums">
+                            {assigned != null ? assigned : <span className="text-muted-foreground">—</span>}
+                          </TableCell>
                           <TableCell className={cn("text-right nums font-medium", tone)}>
                             {fillPct != null ? `${Math.round(fillPct)}%` : "—"}
                           </TableCell>
@@ -208,14 +227,24 @@ export default async function OrderDetailPage({ params }: { params: { id: string
             {po.grnRecord && grnVariances && (
               <Card id="grn">
                 <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
+                  <CardTitle className="flex flex-wrap items-center gap-2">
                     <PackageCheck className="h-4 w-4 text-muted-foreground" />
                     Ordered vs Received · GRN
-                    {grnIsPerfect ? (
-                      <Badge variant="success" className="ml-2">100% · Perfect</Badge>
+                    {/* Gross = delivered ÷ ordered */}
+                    <Badge
+                      variant={grnIsPerfect ? "success" : fill.grossPct != null && fill.grossPct < 80 ? "danger" : "warning"}
+                      className="ml-2"
+                    >
+                      Gross {fill.grossPct ?? 0}%{grnIsPerfect ? " · Perfect" : ""}
+                    </Badge>
+                    {/* Net = delivered ÷ assigned (team allocation or scraped ASN) */}
+                    {fill.netPct != null ? (
+                      <Badge variant={fill.netPct < 80 ? "danger" : fill.netPct >= 100 ? "success" : "warning"}>
+                        Net {fill.netPct}%
+                      </Badge>
                     ) : (
-                      <Badge variant={fillRatePct != null && fillRatePct < 80 ? "danger" : "warning"} className="ml-2">
-                        {fillRatePct ?? 0}% · {grnVariances.filter((v) => v.variance !== 0).length} SKU{grnVariances.filter((v) => v.variance !== 0).length !== 1 ? "s" : ""} differ
+                      <Badge variant="outline" className="text-muted-foreground" title="No assigned/ASN quantity yet — allocate this PO or scrape the channel's ASN to populate net fill.">
+                        Net —
                       </Badge>
                     )}
                   </CardTitle>
@@ -347,7 +376,12 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-function ContextActions({ status, poId }: { status: string; poId: string }) {
+function ContextActions({ status, poId, hasGrn }: { status: string; poId: string; hasGrn: boolean }) {
+  // Once goods are received (GRN exists) the PO is delivered — allocation no longer
+  // applies, so suppress the allocate/manage actions regardless of lagging status.
+  if (hasGrn && (status === "PENDING_REVIEW" || status === "PRIORITISED" || status === "APPROVED")) {
+    return null;
+  }
   switch (status) {
     case "PENDING_REVIEW":
     case "PRIORITISED":

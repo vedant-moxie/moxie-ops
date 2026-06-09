@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { validatePoTaxables } from "@/lib/services/taxable-validation";
+import { computeFillRates } from "@/lib/services/fill-rate";
 
 const DAY = 86_400_000;
 
@@ -226,6 +227,8 @@ export async function getGrns() {
             select: {
               skuId: true,
               requestedQty: true,
+              approvedQty: true,
+              rawData: true,
               sku: { select: { internalCode: true, name: true } },
             },
           },
@@ -253,6 +256,17 @@ export async function getGrns() {
     const totalOrdered = r.po.lineItems.reduce((s, l) => s + l.requestedQty, 0);
     const totalReceived = r.lineItems.reduce((s, l) => s + l.receivedQty, 0);
     const fillRatePct = totalOrdered > 0 ? Math.round((totalReceived / totalOrdered) * 100) : 0;
+    // Net fill = delivered ÷ assigned (team allocation or scraped ASN); null when none.
+    const fill = computeFillRates(
+      r.po.lineItems.map((l) => ({
+        skuId: l.skuId,
+        requestedQty: l.requestedQty,
+        approvedQty: l.approvedQty,
+        rawData: l.rawData,
+      })),
+      r.lineItems.map((l) => ({ skuId: l.skuId, receivedQty: l.receivedQty })),
+    );
+    const netFillPct = fill.netPct;
 
     const allSkuIds = new Set([...orderedBySku.keys(), ...receivedBySku.keys()]);
     const variances: Array<{
@@ -290,6 +304,7 @@ export async function getGrns() {
       totalOrdered,
       totalReceived,
       fillRatePct,
+      netFillPct,
       isPerfect: variances.length === 0,
       discrepancyCount: variances.length,
       variances,

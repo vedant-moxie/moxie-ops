@@ -40,6 +40,7 @@ export interface GrnRow {
   totalOrdered: number;
   totalReceived: number;
   fillRatePct: number;
+  netFillPct: number | null;
   isPerfect: boolean;
   discrepancyCount: number;
   variances: Array<{ internalCode: string; name: string; ordered: number; received: number; variance: number }>;
@@ -232,11 +233,16 @@ export function GrnTable({ grns }: { grns: GrnRow[] }) {
                 )}
               </TableCell>
               <TableCell>
-                <MatchBadge
-                  isPerfect={grn.isPerfect}
-                  fillRatePct={grn.fillRatePct}
-                  variances={grn.variances}
-                />
+                <div className="flex flex-col items-start gap-0.5">
+                  <MatchBadge
+                    isPerfect={grn.isPerfect}
+                    fillRatePct={grn.fillRatePct}
+                    variances={grn.variances}
+                  />
+                  <span className="text-[11px] text-muted-foreground nums">
+                    Net {grn.netFillPct != null ? `${grn.netFillPct}%` : "—"}
+                  </span>
+                </div>
               </TableCell>
               <TableCell className="text-muted-foreground">{formatDate(grn.receivedAt)}</TableCell>
               <TableCell><Badge variant={meta.variant}>{meta.label}</Badge></TableCell>

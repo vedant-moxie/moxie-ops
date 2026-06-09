@@ -83,6 +83,24 @@ function extractActual(
       num(raw.unitPrice) ??
       num(raw.price);
     if (direct != null) return { value: direct, confidence: "high" };
+    // Instamart prices live in protobuf-style money objects {units, nanos, currency_code}.
+    // The reliable per-unit taxable = total_amount_breakdown.amount_excluding_tax ÷ qty
+    // (the per-line unit_cost_price_* fields are inconsistent / per-case).
+    const money = (m: unknown): number | null => {
+      if (!(typeof m === "object" && m !== null)) return null;
+      const o = m as Record<string, unknown>;
+      const units = num(o.units) ?? 0;
+      const nanos = typeof o.nanos === "number" ? o.nanos : 0;
+      const v = units + nanos / 1e9;
+      return v > 0 ? v : null;
+    };
+    const totalBd = raw.total_amount_breakdown as Record<string, unknown> | undefined;
+    const totalExcl = money(totalBd?.amount_excluding_tax);
+    if (totalExcl != null && qty > 0) {
+      return { value: Math.round((totalExcl / qty) * 100) / 100, confidence: "high" };
+    }
+    const unitExcl = money(raw.unit_amount_breakdown && (raw.unit_amount_breakdown as Record<string, unknown>).amount_excluding_tax);
+    if (unitExcl != null) return { value: Math.round(unitExcl * 100) / 100, confidence: "low" };
     if (storedUnitPrice != null) return { value: storedUnitPrice, confidence: "high" };
     return { value: null, confidence: "low" };
   }

@@ -26,7 +26,8 @@ function shortDate(d: string) {
 }
 
 export interface KpiData {
-  fillRateByChannel: { channel: string; fillRate: number }[];
+  fillRateByChannel: { channel: string; gross: number; net: number | null }[];
+  fillRateTrend: { date: string; gross: number | null }[];
   dispatchTat: { date: string; hours: number }[];
   grnAcceptance: { name: string; value: number }[];
   orderVolume: { date: string; count: number }[];
@@ -38,16 +39,40 @@ export function AnalyticsCharts({ data }: { data: KpiData }) {
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <Card>
-        <CardHeader><CardTitle className="text-base">Fill rate by channel</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">Fill rate by channel · gross vs net</CardTitle></CardHeader>
         <CardContent>
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={data.fillRateByChannel} margin={{ left: -16 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#eee7d6" vertical={false} />
               <XAxis dataKey="channel" tick={axis} axisLine={false} tickLine={false} />
               <YAxis tick={axis} axisLine={false} tickLine={false} domain={[0, 100]} unit="%" />
-              <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v}%`, "Fill rate"]} cursor={{ fill: "#f5f1e6" }} />
-              <Bar dataKey="fillRate" fill={LIME} radius={[8, 8, 0, 0]} maxBarSize={56} />
+              <Tooltip
+                contentStyle={tooltipStyle}
+                formatter={(v, name) => [v == null ? "—" : `${v}%`, name === "gross" ? "Gross" : "Net"]}
+                cursor={{ fill: "#f5f1e6" }}
+              />
+              <Bar name="Gross" dataKey="gross" fill={LIME} radius={[8, 8, 0, 0]} maxBarSize={36} />
+              <Bar name="Net" dataKey="net" fill={INK} radius={[8, 8, 0, 0]} maxBarSize={36} />
             </BarChart>
+          </ResponsiveContainer>
+          <div className="mt-2 flex justify-center gap-4 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ background: LIME }} /> Gross (delivered ÷ ordered)</span>
+            <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ background: INK }} /> Net (delivered ÷ assigned)</span>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle className="text-base">Gross fill-rate trend (30 days)</CardTitle></CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={data.fillRateTrend} margin={{ left: -16 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#eee7d6" vertical={false} />
+              <XAxis dataKey="date" tickFormatter={shortDate} tick={axis} axisLine={false} tickLine={false} minTickGap={28} />
+              <YAxis tick={axis} axisLine={false} tickLine={false} domain={[0, 100]} unit="%" />
+              <Tooltip contentStyle={tooltipStyle} labelFormatter={shortDate} formatter={(v) => [v == null ? "—" : `${v}%`, "Gross fill"]} />
+              <Line type="monotone" dataKey="gross" stroke={SUCCESS} strokeWidth={2.5} dot={{ r: 2, fill: SUCCESS }} activeDot={{ r: 5 }} connectNulls />
+            </LineChart>
           </ResponsiveContainer>
         </CardContent>
       </Card>
