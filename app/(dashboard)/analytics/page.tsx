@@ -2,13 +2,16 @@ import { Percent, Target, ShieldCheck, Package } from "lucide-react";
 import { Topbar } from "@/components/layout/topbar";
 import { StatCard } from "@/components/dashboard/summary-stats";
 import { AnalyticsCharts } from "@/components/analytics/charts";
+import { InventoryCoverTable } from "@/components/analytics/inventory-cover-table";
 import { computeKpis } from "@/lib/services/analytics";
+import { computeInventoryCover } from "@/lib/services/inventory-cover";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { pct } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
 export default async function AnalyticsPage() {
-  const kpis = await computeKpis();
+  const [kpis, coverRows] = await Promise.all([computeKpis(), computeInventoryCover()]);
   const net = kpis.summary.netFillRate;
   return (
     <>
@@ -21,6 +24,14 @@ export default async function AnalyticsPage() {
           <StatCard label="Orders this month" value={String(kpis.summary.ordersThisMonth)} icon={Package} accent="lav" />
         </div>
         <AnalyticsCharts data={kpis} />
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Inventory Cover · SOH vs Daily Run Rate</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <InventoryCoverTable rows={coverRows} />
+          </CardContent>
+        </Card>
       </main>
     </>
   );

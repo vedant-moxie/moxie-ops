@@ -1,9 +1,4 @@
-import {
-  BLINKIT_TO_INTERNAL,
-  ZEPTO_TO_INTERNAL,
-  INSTAMART_TO_INTERNAL,
-  NYKAA_TO_INTERNAL,
-} from "@/lib/sku-master-data";
+import { skuMasterMaps } from "@/lib/sku-master-runtime";
 
 type ChannelSource = string;
 
@@ -12,13 +7,15 @@ type ChannelSource = string;
  *
  * source matches case-insensitively against BLINKIT / ZEPTO / INSTAMART / NYKAA.
  * Falls back to channelCode if no mapping exists (never blanks the column).
+ * Reads the live SKU master cache (DB-backed on the server, file defaults otherwise).
  */
 function mapFor(source: ChannelSource): Record<string, string> | null {
   const s = source.toUpperCase();
-  if (s.includes("BLINKIT")) return BLINKIT_TO_INTERNAL;
-  if (s.includes("ZEPTO")) return ZEPTO_TO_INTERNAL;
-  if (s.includes("INSTAMART")) return INSTAMART_TO_INTERNAL;
-  if (s.includes("NYKAA")) return NYKAA_TO_INTERNAL;
+  const maps = skuMasterMaps();
+  if (s.includes("BLINKIT")) return maps.blinkitToInternal;
+  if (s.includes("ZEPTO")) return maps.zeptoToInternal;
+  if (s.includes("INSTAMART")) return maps.instamartToInternal;
+  if (s.includes("NYKAA")) return maps.nykaaToInternal;
   return null;
 }
 
@@ -44,13 +41,6 @@ export function isSkuMapped(source: ChannelSource, channelCode: string | null | 
   return Object.prototype.hasOwnProperty.call(map, channelCode);
 }
 
-const ALL_CHANNEL_MAPS: Record<string, string>[] = [
-  BLINKIT_TO_INTERNAL,
-  ZEPTO_TO_INTERNAL,
-  INSTAMART_TO_INTERNAL,
-  NYKAA_TO_INTERNAL,
-];
-
 /**
  * Resolves a channel SKU code to the Moxie internal code without knowing which
  * channel it came from — scans every reverse map. Used where the source channel
@@ -58,7 +48,8 @@ const ALL_CHANNEL_MAPS: Record<string, string>[] = [
  * unchanged when no map contains it (already-internal codes pass through).
  */
 export function resolveInternalSkuAnyChannel(channelCode: string): string {
-  for (const map of ALL_CHANNEL_MAPS) {
+  const maps = skuMasterMaps();
+  for (const map of [maps.blinkitToInternal, maps.zeptoToInternal, maps.instamartToInternal, maps.nykaaToInternal]) {
     const internal = map[channelCode];
     if (internal) return internal;
   }

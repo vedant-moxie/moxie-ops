@@ -21,6 +21,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { ChannelChip } from "@/components/shared/channel-chip";
+import { SkuMasterCard, type SkuMasterRow } from "@/components/settings/sku-master-card";
 import { formatDateTime, pct } from "@/lib/utils";
 
 interface Channel {
@@ -36,16 +37,6 @@ interface Channel {
   active: boolean;
   _count: { purchaseOrders: number; channelSkus: number };
 }
-interface Sku {
-  id: string;
-  internalCode: string;
-  name: string;
-  category: string | null;
-  hsnCode: string | null;
-  gstRate: number;
-  casePackSize: number;
-}
-
 interface RecipientEntry {
   name: string;
   email: string;
@@ -61,12 +52,14 @@ const DISPATCH_LOCATIONS = ["RGL NCR", "RGL BLR", "RGL MUM"];
 export function SettingsTabs({
   channels,
   skus,
+  isAdmin,
   warehouseEmail,
   spreadsheetId,
   locationRecipients,
 }: {
   channels: Channel[];
-  skus: Sku[];
+  skus: SkuMasterRow[];
+  isAdmin: boolean;
   warehouseEmail: string;
   spreadsheetId: string;
   locationRecipients: LocationRecipientsMap;
@@ -164,32 +157,7 @@ export function SettingsTabs({
 
       {/* SKUs */}
       <TabsContent value="skus">
-        <Card className="overflow-hidden">
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead>Code</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>HSN</TableHead>
-                  <TableHead className="text-right">GST</TableHead>
-                  <TableHead className="text-right">Case pack</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {skus.map((s) => (
-                  <TableRow key={s.id}>
-                    <TableCell className="font-medium">{s.internalCode}</TableCell>
-                    <TableCell className="text-muted-foreground">{s.name}</TableCell>
-                    <TableCell className="nums text-muted-foreground">{s.hsnCode}</TableCell>
-                    <TableCell className="text-right nums">{pct(s.gstRate, 0)}</TableCell>
-                    <TableCell className="text-right nums">{s.casePackSize}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        <SkuMasterCard rows={skus} isAdmin={isAdmin} />
       </TabsContent>
 
       {/* Inventory */}

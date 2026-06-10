@@ -3,13 +3,25 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, Loader2, Wand2, PackageCheck, Mail, Trash2, Undo2 } from "lucide-react";
+import { AlertTriangle, Loader2, Wand2, PackageCheck, Mail, Trash2, Undo2, Warehouse } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { cn, formatNumber } from "@/lib/utils";
+
+export interface WarehouseStockEntry {
+  warehouseCode: string;
+  warehouseName: string;
+  /** Free available saleable units (WMS free minus allocations since last sync) */
+  freeQty: number;
+  /** Total saleable on hand in WMS */
+  totalQty: number;
+  syncedAt: string;
+}
+/** skuId → per-warehouse entries */
+export type WarehouseStockBySku = Record<string, WarehouseStockEntry[]>;
 
 interface Line {
   id: string;
@@ -26,12 +38,19 @@ export function PoAllocator({
   poId,
   lines,
   receivedBySku,
+  warehouseStock = {},
+  dispatchWarehouseCode = null,
+  dispatchWarehouseName = null,
   hasTaxableMismatch = false,
   lockedByOther = false,
 }: {
   poId: string;
   lines: Line[];
   receivedBySku: Record<string, number>;
+  warehouseStock?: WarehouseStockBySku;
+  /** Warehouse that ships this PO (resolved from the GSTIN on the PO PDF) */
+  dispatchWarehouseCode?: string | null;
+  dispatchWarehouseName?: string | null;
   hasTaxableMismatch?: boolean;
   lockedByOther?: boolean;
 }) {
@@ -99,6 +118,27 @@ export function PoAllocator({
   const totalAlloc = lines.reduce((s, l) => s + (removed.has(l.skuId) ? 0 : alloc[l.skuId] ?? 0), 0);
   const removedCount = lines.filter((l) => removed.has(l.skuId)).length;
 
+  // Aggregate per-warehouse totals across all PO SKUs (for the summary panel)
+  const whTotals = new Map<string, { name: string; totalFree: number }>();
+  let stockSyncedAt: string | null = null;
+  for (const l of lines) {
+    const entries = warehouseStock[l.skuId] ?? [];
+    for (const e of entries) {
+      const cur = whTotals.get(e.warehouseCode) ?? { name: e.warehouseName, totalFree: 0 };
+      cur.totalFree += e.freeQty;
+      whTotals.set(e.warehouseCode, cur);
+      if (!stockSyncedAt || e.syncedAt > stockSyncedAt) stockSyncedAt = e.syncedAt;
+    }
+  }
+  const hasWarehouseData = whTotals.size > 0;
+
+  /** Free stock for one line at the dispatch warehouse (null when unknown). */
+  const freeAtDispatch = (skuId: string): number | null => {
+    if (!dispatchWarehouseCode) return null;
+    const e = (warehouseStock[skuId] ?? []).find((x) => x.warehouseCode === dispatchWarehouseCode);
+    return e ? e.freeQty : 0;
+  };
+
   async function save() {
     setSaving(true);
     try {
@@ -135,6 +175,43 @@ export function PoAllocator({
 
   return (
     <div className="space-y-4">
+      {hasWarehouseData && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-4 py-2.5">
+          <Warehouse className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="text-xs font-medium text-muted-foreground">Free stock:</span>
+          {[...whTotals.entries()].map(([code, wh]) => {
+            const isDispatch = code === dispatchWarehouseCode;
+            return (
+              <span
+                key={code}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs",
+                  isDispatch
+                    ? "border-emerald-400 bg-emerald-50 dark:border-emerald-700 dark:bg-emerald-950/40"
+                    : "border-border/60 bg-card",
+                )}
+              >
+                <span className="font-mono font-semibold">{code}</span>
+                <span className="text-muted-foreground">{wh.name !== code ? wh.name : ""}</span>
+                <span className="font-semibold nums text-foreground">{formatNumber(wh.totalFree)}</span>
+                <span className="text-muted-foreground">units</span>
+                {isDispatch && (
+                  <Badge variant="outline" className="ml-1 border-emerald-500 px-1.5 py-0 text-[10px] text-emerald-700 dark:text-emerald-300">
+                    ships this PO
+                  </Badge>
+                )}
+              </span>
+            );
+          })}
+          <span className="ml-auto text-[11px] text-muted-foreground">
+            {dispatchWarehouseName
+              ? `Ships from ${dispatchWarehouseName} (PO GSTIN)`
+              : "Shipping warehouse unknown — no GSTIN match"}
+            {stockSyncedAt ? ` · WMS sync ${new Date(stockSyncedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}` : ""}
+          </span>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="outline" size="sm" onClick={fillOrdered}>
           <Wand2 className="h-4 w-4" /> Fill all to ordered
@@ -160,6 +237,11 @@ export function PoAllocator({
               <TableHead>UOM</TableHead>
               <TableHead className="text-right">Ordered</TableHead>
               <TableHead className="text-right">Received</TableHead>
+              {hasWarehouseData && (
+                <TableHead className="text-right">
+                  {dispatchWarehouseCode ? `Free @ ${dispatchWarehouseCode}` : "Free stock"}
+                </TableHead>
+              )}
               <TableHead className="text-right">Allocate</TableHead>
               <TableHead className="text-right">Remove</TableHead>
             </TableRow>
@@ -194,6 +276,36 @@ export function PoAllocator({
                   <TableCell className="text-right nums">
                     {received != null ? received : <span className="text-muted-foreground">—</span>}
                   </TableCell>
+                  {hasWarehouseData && (() => {
+                    const entries = warehouseStock[l.skuId] ?? [];
+                    // Judge availability at the shipping warehouse when known,
+                    // otherwise against the total across warehouses.
+                    const atDispatch = freeAtDispatch(l.skuId);
+                    const available = atDispatch ?? entries.reduce((s, e) => s + e.freeQty, 0);
+                    const qty = alloc[l.skuId] ?? 0;
+                    const sufficient = available >= qty && qty > 0;
+                    const tooltipLines = entries.length > 0
+                      ? entries.map((e) => `${e.warehouseCode}: ${formatNumber(e.freeQty)} free`).join(" · ")
+                      : "";
+                    return (
+                      <TableCell className="text-right nums" title={tooltipLines || undefined}>
+                        {entries.length === 0 ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : (
+                          <span
+                            className={cn(
+                              "font-medium",
+                              available === 0 && "text-rose-600 dark:text-rose-400",
+                              available > 0 && !sufficient && "text-amber-600 dark:text-amber-400",
+                              sufficient && "text-emerald-600 dark:text-emerald-400",
+                            )}
+                          >
+                            {formatNumber(available)}
+                          </span>
+                        )}
+                      </TableCell>
+                    );
+                  })()}
                   <TableCell className="text-right">
                     <input
                       type="number"

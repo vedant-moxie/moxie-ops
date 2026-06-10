@@ -188,6 +188,7 @@ export async function getPoForAllocation(id: string) {
     select: {
       id: true,
       channelPoNumber: true,
+      source: true,
       status: true,
       poDate: true,
       requestedDeliveryDate: true,
@@ -241,9 +242,6 @@ export async function getChannels() {
   });
 }
 
-export async function getSkus() {
-  return prisma.sku.findMany({ orderBy: { internalCode: "asc" } });
-}
 
 export async function getGrns() {
   const records = await prisma.grnRecord.findMany({

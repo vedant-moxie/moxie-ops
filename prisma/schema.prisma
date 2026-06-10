@@ -55,6 +55,45 @@ model Sku {
   inventorySnapshots InventorySnapshot[]
 }
 
+/// Editable SKU master — the single source of truth for channel-SKU mappings and
+/// per-channel taxable values (Settings → SKUs, admin-only). Mirrors the columns of
+/// the "SKU Master" workbook so it round-trips to/from xlsx/csv. Read through
+/// lib/services/sku-master.ts, which caches it and powers SKU resolution + the
+/// allocation price-mismatch gate. `gstRate` is a fraction (0.05 = 5%) as in the sheet.
+model SkuMaster {
+  id           String  @id @default(cuid())
+  internalCode String  @unique // "GCS200" — our SKU id, the key linking every channel
+  name         String? // product name (kept in sync with Sku.name when available)
+  hsnCode      String?
+  gstRate      Float   @default(0)
+  mrp          Float? // New MRP
+  taxableB2B   Float? // New Taxable Value for B2B
+
+  // Channel SKU codes (how our id links to each platform)
+  zeptoCode     String?
+  nykaaCode     String?
+  instamartCode String?
+  blinkitCode   String?
+
+  // Per-channel expected unit taxable value (excl. GST)
+  taxableZepto     Float?
+  taxableNykaa     Float?
+  taxableInstamart Float?
+  taxableMyntra    Float?
+  taxableBlinkit   Float?
+  taxableReliance  Float?
+  taxableAmazonNow Float?
+
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([blinkitCode])
+  @@index([zeptoCode])
+  @@index([nykaaCode])
+  @@index([instamartCode])
+}
+
 model ChannelSku {
   id             String  @id @default(cuid())
   channelId      String
@@ -106,7 +145,6 @@ model PurchaseOrder {
   deliveryRecord       DeliveryRecord?
   grnRecord            GrnRecord?
   invoice              Invoice?
-  auditLogs            AuditLog[]
 
   @@index([channelId])
   @@index([status])
@@ -170,6 +208,26 @@ model InventorySnapshot {
   sku Sku @relation(fields: [skuId], references: [id])
 
   @@index([skuId, snapshotAt])
+}
+
+/// Live per-warehouse saleable stock mirrored from the WMS Consolidated Stock
+/// report. `wmsFreeQty` is the free-available figure from the last sync;
+/// `freeQty` starts equal to it and is decremented locally on each allocation
+/// so back-to-back POs see shrinking availability until the next sync
+/// (when the WMS's own salesorder-lock takes over) re-baselines it.
+model WarehouseStock {
+  id            String   @id @default(cuid())
+  warehouseCode String // registry code: NCR | BLR | MUM (lib/warehouses.ts)
+  skuCode       String // master SKU code as in WMS (e.g. "CAHHO100")
+  totalQty      Int      @default(0) // saleable quantity in WMS
+  lockedQty     Int      @default(0) // salesorder + picking locked in WMS
+  wmsFreeQty    Int      @default(0) // free available per last WMS sync
+  freeQty       Int      @default(0) // wmsFreeQty minus local allocations since sync
+  syncedAt      DateTime
+  updatedAt     DateTime @updatedAt
+
+  @@unique([warehouseCode, skuCode])
+  @@index([skuCode])
 }
 
 model WarehouseInstruction {
@@ -341,6 +399,10 @@ model ProcessedEmail {
   result         Json?
 }
 
+/// Generic immutable audit trail. `entityId` is a free-form key (a PO id, a
+/// channel id, a SkuMaster internalCode, …) interpreted with `entityType` — no
+/// FK, so any entity can be audited. PO history is read via
+/// (entityType="PurchaseOrder", entityId=poId).
 model AuditLog {
   id          String   @id @default(cuid())
   entityType  String
@@ -349,8 +411,6 @@ model AuditLog {
   performedBy String?
   changes     Json?
   createdAt   DateTime @default(now())
-
-  po PurchaseOrder? @relation(fields: [entityId], references: [id])
 
   @@index([entityType, entityId])
 }

@@ -19,6 +19,10 @@
     {
       "path": "/api/cron/zepto-sync",
       "schedule": "30 */3 * * *"
+    },
+    {
+      "path": "/api/cron/wms-stock-sync",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

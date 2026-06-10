@@ -10,6 +10,9 @@ import { getPoForAllocation } from "@/lib/data/queries";
 import { validatePoTaxables } from "@/lib/services/taxable-validation";
 import { currentActor } from "@/lib/auth";
 import { isClaimedByOther } from "@/lib/services/po-claim";
+import { readWarehouseStock } from "@/lib/services/wms-stock-sync";
+import { resolveDispatchFromForPo } from "@/lib/services/po-documents";
+import { warehouseByDispatchFrom } from "@/lib/warehouses";
 import { formatINR, formatDate } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +26,16 @@ export default async function AllocatePoPage({ params }: { params: { id: string 
 
   const receivedBySku: Record<string, number> = {};
   for (const l of po.grnRecord?.lineItems ?? []) receivedBySku[l.skuId] = l.receivedQty;
+
+  const skuIds = po.lineItems.map((l) => l.skuId);
+  // Live WMS stock + the shipping warehouse (from the GSTIN on the PO PDF), in parallel
+  const [warehouseStock, dispatch] = await Promise.all([
+    readWarehouseStock(skuIds).catch(() => ({})),
+    resolveDispatchFromForPo(po).catch(() => null),
+  ]);
+  const dispatchWarehouse = dispatch?.dispatchFrom
+    ? warehouseByDispatchFrom(dispatch.dispatchFrom)
+    : null;
 
   const taxValidation = validatePoTaxables(po);
   const mismatchLines = taxValidation.lines.filter((l) => l.mismatch);
@@ -106,6 +119,9 @@ export default async function AllocatePoPage({ params }: { params: { id: string 
             };
           })}
           receivedBySku={receivedBySku}
+          warehouseStock={warehouseStock}
+          dispatchWarehouseCode={dispatchWarehouse?.code ?? null}
+          dispatchWarehouseName={dispatchWarehouse?.wmsName ?? dispatch?.dispatchFrom ?? null}
           hasTaxableMismatch={taxValidation.hasTaxableMismatch}
           lockedByOther={lockedByOther}
         />

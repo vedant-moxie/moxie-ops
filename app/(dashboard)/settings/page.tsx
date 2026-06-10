@@ -1,19 +1,22 @@
 import { Topbar } from "@/components/layout/topbar";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
 import { EmailSeriesCard } from "@/components/settings/email-series-card";
-import { getChannels, getSkus } from "@/lib/data/queries";
+import { getChannels } from "@/lib/data/queries";
+import { listSkuMaster } from "@/lib/services/sku-master";
 import { getLocationRecipientsMap } from "@/lib/services/app-settings";
 import { getSeries } from "@/lib/services/email-ref-counter";
+import { isAdmin } from "@/lib/auth";
 import { env } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const [channels, skus, locationRecipients, series] = await Promise.all([
+  const [channels, skus, locationRecipients, series, admin] = await Promise.all([
     getChannels(),
-    getSkus(),
+    listSkuMaster(),
     getLocationRecipientsMap(),
     getSeries(),
+    isAdmin(),
   ]);
   return (
     <>
@@ -23,6 +26,7 @@ export default async function SettingsPage() {
         <SettingsTabs
           channels={channels}
           skus={skus}
+          isAdmin={admin}
           warehouseEmail={env.WAREHOUSE_EMAIL}
           spreadsheetId={env.INVENTORY_SPREADSHEET_ID ?? ""}
           locationRecipients={locationRecipients}

@@ -16,6 +16,8 @@ const schema = z.object({
   // Clerk
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string().optional(),
   CLERK_SECRET_KEY: z.string().optional(),
+  // Comma-separated emails allowed to edit admin-gated config (e.g. SKU master)
+  ADMIN_EMAILS: z.string().default("amritya@moxiebeauty.in"),
 
   // Anthropic
   ANTHROPIC_API_KEY: z.string().optional(),
@@ -200,6 +202,24 @@ const schema = z.object({
   COMPANY_BANK_ACCOUNT_NO: z.string().default("000000000000"),
   COMPANY_BANK_IFSC: z.string().default("HDFC0000000"),
   COMPANY_BANK_NAME: z.string().default("HDFC Bank"),
+
+  // WMS (Benchmark Computer Solutions / myrgl.com)
+  // For live access remove "uat" from the base URL per WMS doc.
+  WMS_BASE_URL: z.string().default("https://wms-uat-api.myrgl.com"),
+  // Portal API behind wms.myrgl.com — used for stock reports (no external report API exists)
+  WMS_PORTAL_BASE_URL: z.string().default("https://wms-api.myrgl.com"),
+  WMS_EMAIL: z.string().optional(),
+  WMS_PASSWORD: z.string().optional(),
+  // Warehouse stock rows older than this trigger a re-sync on read
+  WMS_STOCK_STALE_MINUTES: z.coerce.number().default(15),
+  // Manual overrides for the Outward LOI Report (auto-discovered by name if not set)
+  WMS_OUTWARD_REPORT_ID: z.coerce.number().optional(),
+  WMS_OUTWARD_REPORT_SP: z.string().optional(),
+  // JSON array: [{"code":"W21","name":"Bhiwandi","sheetRange":"W21!A2:D"},...]
+  WMS_WAREHOUSES: z.string().optional(),
+  // WMS party codes per channel name: {"Blinkit":"25725800003702976","Zepto":"..."}
+  WMS_PARTY_CODES: z.string().optional(),
+  WMS_DEFAULT_PARTY_CODE: z.string().optional(),
 
   // Cron
   CRON_SECRET: z.string().optional(),

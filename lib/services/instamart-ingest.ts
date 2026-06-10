@@ -143,7 +143,19 @@ export async function ingestLiveInstamartPOs(
         // Absent on stock-out lines (treated as 0).
         const grnRaw = line.grn_qty ?? line.grnQty ?? null;
         const receivedQty = grnRaw != null ? Math.max(0, Math.round(Number(grnRaw) || 0)) : 0;
-        const unitPrice = Number(line.unit_price ?? line.unitPrice ?? line.price ?? null) || null;
+        // Instamart uses Money proto for prices. "unit_cost_price_excluding_tax" is
+        // the LINE TOTAL excl tax (not per-unit despite the name); divide by qty for unitPrice.
+        const lineTotalExcl = (() => {
+          const m = line.unit_cost_price_excluding_tax as { units?: number; nanos?: number } | null | undefined;
+          if (!m || typeof m !== "object") return null;
+          const v = (m.units ?? 0) + (m.nanos ?? 0) / 1e9;
+          return v > 0 ? v : null;
+        })();
+        const fromProto = lineTotalExcl != null && qty > 0
+          ? Math.round((lineTotalExcl / qty) * 100) / 100
+          : null;
+        const fromFlat = Number(line.unit_price ?? line.unitPrice ?? line.price ?? null) || null;
+        const unitPrice = fromProto ?? fromFlat;
         return { code, name, qty, receivedQty, unitPrice, rawData: line as Prisma.InputJsonValue };
       });
     } else {

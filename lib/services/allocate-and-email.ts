@@ -3,12 +3,16 @@ import { prisma } from "@/lib/db";
 import { writeAudit } from "@/lib/services/audit";
 import { sendPoPreparationEmail } from "@/lib/integrations/po-test-email";
 import type { EmailAttachment } from "@/lib/integrations/po-test-email";
-import { getPoDocuments, extractGstinFromPdf } from "@/lib/services/po-documents";
+import { getPoDocuments, extractGstinFromPdf, resolveDispatchFromForPo } from "@/lib/services/po-documents";
 import { resolveDispatchFromGstins } from "@/lib/services/po-documents-helpers";
 import { resolveInternalSku } from "@/lib/services/sku-resolver";
 import { getLocationRecipients } from "@/lib/services/app-settings";
 import { validatePoTaxables } from "@/lib/services/taxable-validation";
 import { claimPo, PoClaimedError } from "@/lib/services/po-claim";
+import { wmsConfigured, pushSalesOrder } from "@/lib/integrations/wms";
+import { decrementWarehouseStock } from "@/lib/services/wms-stock-sync";
+import { warehouseByDispatchFrom, type WarehouseInfo } from "@/lib/warehouses";
+import { env } from "@/lib/env";
 
 const FACILITY_KEYS = [
   "facilityname", "facility_name", "facility", "warehouse",
@@ -18,6 +22,20 @@ const DISPATCH_KEYS = [
   "dispatchfrom", "dispatch_from", "sourcewh", "source_wh",
   "sourcecode", "fromwh", "fromwarehouse", "senderfacility",
 ];
+
+/** Resolve WMS party code for a channel name. */
+function resolveWmsPartyCode(channelName: string): string {
+  const raw = env.WMS_PARTY_CODES;
+  if (raw) {
+    try {
+      const map = JSON.parse(raw) as Record<string, string>;
+      const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const entry = Object.entries(map).find(([k]) => norm(k) === norm(channelName));
+      if (entry) return entry[1];
+    } catch { /* ignore */ }
+  }
+  return env.WMS_DEFAULT_PARTY_CODE ?? channelName;
+}
 
 function extractRaw(obj: unknown, keys: string[]): string {
   if (!obj || typeof obj !== "object") return "—";
@@ -253,6 +271,108 @@ export async function allocateAndEmailPo(
     }
   } catch (err) {
     console.error("[allocate-and-email] email send failed:", err);
+  }
+
+  // Subtract the allocation from the local per-warehouse stock mirror (so the
+  // next PO immediately sees less free stock) and push a Sales Order to the
+  // WMS to block the quantity there. Both are non-fatal.
+  if (wmsConfigured()) {
+    try {
+      const wmsPo = await prisma.purchaseOrder.findUnique({
+        where: { id: poId },
+        select: {
+          channelPoNumber: true,
+          source: true,
+          rawData: true,
+          channel: { select: { name: true } },
+          lineItems: {
+            select: {
+              skuId: true,
+              approvedQty: true,
+              unitPrice: true,
+              sku: { select: { internalCode: true, name: true } },
+              rawData: true,
+            },
+          },
+        },
+      });
+      if (wmsPo) {
+        // Shipping warehouse: GSTIN on the PO PDF first, rawData dispatch fields as fallback.
+        let warehouse: WarehouseInfo | null = null;
+        try {
+          const resolved = await resolveDispatchFromForPo(wmsPo);
+          if (resolved.dispatchFrom) warehouse = warehouseByDispatchFrom(resolved.dispatchFrom);
+          if (resolved.warnings.length) {
+            console.warn("[allocate-and-email] dispatch warehouse:", resolved.warnings);
+          }
+        } catch { /* fall through to rawData */ }
+        if (!warehouse) {
+          const firstRaw = wmsPo.lineItems[0]?.rawData;
+          const dispatchLabel =
+            extractRaw(wmsPo.rawData, DISPATCH_KEYS) !== "—"
+              ? extractRaw(wmsPo.rawData, DISPATCH_KEYS)
+              : extractRaw(firstRaw, DISPATCH_KEYS);
+          if (dispatchLabel !== "—") warehouse = warehouseByDispatchFrom(dispatchLabel);
+        }
+
+        if (warehouse) {
+          const allocLines = wmsPo.lineItems
+            .filter((l) => (l.approvedQty ?? 0) > 0)
+            .map((l) => ({
+              skuCode: l.sku.internalCode,
+              skuDescription: l.sku.name,
+              quantity: l.approvedQty!,
+              mrp: l.unitPrice ?? 0,
+              amount: (l.unitPrice ?? 0) * l.approvedQty!,
+            }));
+
+          if (allocLines.length > 0) {
+            // 1. Local mirror: itna katt gaya — next allocation sees the reduced number.
+            try {
+              await decrementWarehouseStock(
+                warehouse.code,
+                allocLines.map((l) => ({ skuCode: l.skuCode, qty: l.quantity })),
+              );
+              await writeAudit({
+                entityType: "PurchaseOrder",
+                entityId: poId,
+                action: "WAREHOUSE_STOCK_DEDUCTED",
+                performedBy: actorLabel,
+                changes: {
+                  warehouseCode: warehouse.code,
+                  lines: allocLines.map((l) => ({ sku: l.skuCode, qty: l.quantity })),
+                },
+              });
+            } catch (err) {
+              console.error("[allocate-and-email] local stock decrement failed:", err);
+            }
+
+            // 2. WMS sales order to lock the stock at the warehouse.
+            const soId = await pushSalesOrder({
+              orderNo: wmsPo.channelPoNumber ?? poId,
+              orderDate: new Date().toISOString(),
+              warehouseCode: warehouse.wmsCode,
+              warehouseName: warehouse.wmsName,
+              partyCode: resolveWmsPartyCode(wmsPo.channel.name),
+              partyName: wmsPo.channel.name,
+              lines: allocLines,
+            });
+            await writeAudit({
+              entityType: "PurchaseOrder",
+              entityId: poId,
+              action: "WMS_SO_PUSHED",
+              performedBy: actorLabel,
+              changes: { salesorder_id: soId, warehouseCode: warehouse.code },
+            });
+            console.info(`[allocate-and-email] WMS SO ${soId} pushed for PO ${poId} (${warehouse.code})`);
+          }
+        } else {
+          console.info("[allocate-and-email] WMS push skipped — shipping warehouse unresolved (no GSTIN match)");
+        }
+      }
+    } catch (err) {
+      console.error("[allocate-and-email] WMS SO push failed (non-fatal):", err);
+    }
   }
 
   return { emailMessageId };

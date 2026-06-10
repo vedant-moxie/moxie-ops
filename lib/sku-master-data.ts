@@ -3,6 +3,26 @@
 // Regenerate: node scripts/generate-sku-master.mjs
 // Maps channel SKU codes -> Moxie internal SKU codes (reverse lookup).
 
+/** Canonical Moxie master SKU codes (source: SKU Master Excel, first column). */
+export const MASTER_SKUS = new Set([
+  "GCS1000","GCS200","GCS50","GCS15",
+  "UHC500","UHC175","UHC50","UHC15",
+  "SDCC500","SDCC120","SDCC50","SDCC15",
+  "WLIC500","WLIC120","WLIC50","WLIC15",
+  "FSSG500","FSSG120","FSSG50","FSSG15",
+  "CAHHO100","FF10","FFHS50",
+  "TUWC","TUCC","TMWR","TMCR","JTEWT","JTECT",
+  "WCR","DTFT","RSD","WVSD","CVSD","TMWTR","TMCTR",
+  "FF20","WETT","CETT","RSTD","WVSTD","CVSTD",
+  "SC15","SW15","SM1","SS4","SS2","TH30","FHPS100","TP",
+  "HFB1","THFD","HMSHGD","RSD15","CDDS30","PIG1","CDDBD1",
+  "HARS200","HARC175","HAHS50","CD1",
+  "THRR","HRWD","HARC120","HARS120","HRTWD","HARC15","HARS15",
+  "R3OGSRP","GCS500","HARC500","HARS1000",
+  "DDHM200","SRS200","SRS10","MRC175","MRC10",
+  "DCLOS30","DDPWT100","TSSR","SSWD","SET","STSD",
+]);
+
 export const BLINKIT_TO_INTERNAL: Record<string, string> = {
   "10201596": "GCS50",
   "10201604": "UHC50",

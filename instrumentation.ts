@@ -7,6 +7,15 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
   try {
+    // Load the editable SKU master from the DB so resolution + taxable checks
+    // use live data (falls back to the generated file when the table is empty).
+    const { refreshSkuMasterCache } = await import("@/lib/services/sku-master");
+    const n = await refreshSkuMasterCache();
+    console.info(`[instrumentation] SKU master cache warmed (${n} DB rows)`);
+  } catch (e) {
+    console.error("[instrumentation] failed to warm SKU master cache", e);
+  }
+  try {
     const { startBlinkitAutoSync } = await import("@/lib/services/blinkit-scheduler");
     startBlinkitAutoSync();
   } catch (e) {

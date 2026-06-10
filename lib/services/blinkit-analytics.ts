@@ -6,6 +6,14 @@ import { resolveFields } from "@/lib/integrations/blinkit/fields";
 const DAY = 86_400_000;
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
+function readMoneyProto(raw: Record<string, unknown>, field: string): number | null {
+  const m = raw[field];
+  if (!m || typeof m !== "object") return null;
+  const mo = m as { units?: number; nanos?: number };
+  const v = (mo.units ?? 0) + (mo.nanos ?? 0) / 1e9;
+  return v > 0 ? v : null;
+}
+
 export interface BlinkitPoItem {
   itemId: string;
   upc: string | null;
@@ -153,25 +161,44 @@ export async function computeChannelInsights({
     const items: BlinkitPoRow["items"] = [];
     for (const l of po.lineItems) {
       const code = l.sku.internalCode;
+      const lraw = (l.rawData as Record<string, unknown> | null) ?? {};
+
+      const rawTotalAmount = lraw.total_amount;
+      // Instamart stores line prices as Money proto objects. Despite the name,
+      // "unit_cost_price_*" holds the LINE TOTAL (confirmed: sum = PO totalRequestedValue).
+      const instamartLineTotal = readMoneyProto(lraw, "unit_cost_price_including_tax");
+      const instamartLineExcl = readMoneyProto(lraw, "unit_cost_price_excluding_tax");
+
+      const lineValue =
+        (rawTotalAmount != null ? Number(String(rawTotalAmount).replace(/[^0-9.]/g, "")) : 0) ||
+        (l.unitPrice != null ? l.unitPrice * l.requestedQty : 0) ||
+        instamartLineTotal ||
+        null;
+
+      // Per-unit price: prefer stored unitPrice, fall back to Instamart excl-tax line total ÷ qty
+      const derivedUnitPrice =
+        l.unitPrice ??
+        (instamartLineExcl != null && l.requestedQty > 0
+          ? Math.round((instamartLineExcl / l.requestedQty) * 100) / 100
+          : null);
+
+      const uomRaw = lraw.uom_text ?? lraw.unit_of_measurement ?? null;
+
       const a = itemAgg.get(code) ?? { code, name: l.sku.name, units: 0, value: 0, pos: new Set<string>() };
       a.units += l.requestedQty;
-      a.value += (l.unitPrice ?? 0) * l.requestedQty;
+      a.value += lineValue ?? (derivedUnitPrice ?? 0) * l.requestedQty;
       a.pos.add(po.id);
       itemAgg.set(code, a);
 
-      const lraw = (l.rawData as Record<string, string> | null) ?? {};
-      const lineValue =
-        Number(String(lraw.total_amount ?? "").replace(/[^0-9.]/g, "")) ||
-        (l.unitPrice != null ? l.unitPrice * l.requestedQty : 0);
       items.push({
         itemId: l.channelSkuCode ?? l.sku.internalCode,
-        upc: lraw.upc ?? null,
+        upc: typeof lraw.upc === "string" ? lraw.upc : null,
         name: l.sku.name,
-        uom: lraw.uom_text ?? l.sku.uom ?? null,
+        uom: (typeof uomRaw === "string" ? uomRaw : null) ?? l.sku.uom ?? null,
         ordered: l.requestedQty,
         received: receivedBySku.get(l.skuId) ?? null,
-        unitPrice: l.unitPrice,
-        value: lineValue || null,
+        unitPrice: derivedUnitPrice,
+        value: lineValue,
       });
     }
 

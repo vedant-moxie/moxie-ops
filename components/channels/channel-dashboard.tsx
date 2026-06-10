@@ -463,7 +463,6 @@ function PoTable({ rows }: { rows: ChannelInsights["pos"] }) {
                           <thead>
                             <tr className="border-b border-border/60 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                               <th className="px-3 py-2">Item ID</th>
-                              <th className="px-3 py-2">UPC</th>
                               <th className="px-3 py-2">Product</th>
                               <th className="px-3 py-2">UOM</th>
                               <th className="px-3 py-2 text-right">Ordered</th>
@@ -476,7 +475,6 @@ function PoTable({ rows }: { rows: ChannelInsights["pos"] }) {
                             {po.items.map((it, i) => (
                               <tr key={it.itemId + i} className="border-b border-border/40 last:border-0">
                                 <td className="px-3 py-2 font-mono text-xs">{it.itemId}</td>
-                                <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{it.upc ?? "—"}</td>
                                 <td className="max-w-[280px] px-3 py-2"><div className="truncate">{it.name}</div></td>
                                 <td className="px-3 py-2 text-muted-foreground">{it.uom ?? "—"}</td>
                                 <td className="px-3 py-2 text-right nums font-medium">{formatNumber(it.ordered)}</td>

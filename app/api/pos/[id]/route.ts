@@ -20,11 +20,14 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
         deliveryRecord: true,
         grnRecord: { include: { lineItems: { include: { sku: true } }, discrepancies: true } },
         invoice: true,
-        auditLogs: { orderBy: { createdAt: "asc" } },
       },
     });
     if (!po) return fail(new Error("PO not found"), 404);
-    return ok(po);
+    const auditLogs = await prisma.auditLog.findMany({
+      where: { entityType: "PurchaseOrder", entityId: params.id },
+      orderBy: { createdAt: "asc" },
+    });
+    return ok({ ...po, auditLogs });
   });
 }
 

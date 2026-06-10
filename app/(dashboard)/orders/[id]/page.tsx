@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { AlertTriangle, ArrowLeft, Truck, Mail, FileText, PackageCheck } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Truck, Mail, FileText } from "lucide-react";
 import { Topbar } from "@/components/layout/topbar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,6 @@ import { Separator } from "@/components/ui/separator";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { PriorityBadge } from "@/components/dashboard/priority-badge";
 import { ChannelChip } from "@/components/shared/channel-chip";
-import { OrderTimeline } from "@/components/orders/order-timeline";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -21,7 +20,7 @@ import { cn, formatINR, formatDate, formatDateTime } from "@/lib/utils";
 export const dynamic = "force-dynamic";
 
 export default async function OrderDetailPage({ params }: { params: { id: string } }) {
-  const po = await prisma.purchaseOrder.findUnique({
+  const poBase = await prisma.purchaseOrder.findUnique({
     where: { id: params.id },
     include: {
       channel: true,
@@ -31,10 +30,14 @@ export default async function OrderDetailPage({ params }: { params: { id: string
       deliveryRecord: true,
       grnRecord: { include: { lineItems: true, discrepancies: true } },
       invoice: true,
-      auditLogs: { orderBy: { createdAt: "asc" } },
     },
   });
-  if (!po) notFound();
+  if (!poBase) notFound();
+  const auditLogs = await prisma.auditLog.findMany({
+    where: { entityType: "PurchaseOrder", entityId: params.id },
+    orderBy: { createdAt: "asc" },
+  });
+  const po = { ...poBase, auditLogs };
 
   const taxValidation = validatePoTaxables(po);
   const taxByLine = new Map(taxValidation.lines.map((l) => [l.lineId, l]));
@@ -57,30 +60,10 @@ export default async function OrderDetailPage({ params }: { params: { id: string
   // Once a PO has a GRN it's delivered & received — the allocate action no longer applies.
   const isReceived = po.grnRecord != null;
 
-  // Compute ordered-vs-received discrepancy breakdown for GRN section
-  const grnVariances = po.grnRecord
-    ? (() => {
-        const orderedBySku = new Map(po.lineItems.map((l) => [l.skuId, l.requestedQty]));
-        const allSkuIds = new Set([...orderedBySku.keys(), ...receivedBySku.keys()]);
-        return Array.from(allSkuIds).map((skuId) => {
-          const ordered = orderedBySku.get(skuId) ?? 0;
-          const received = receivedBySku.get(skuId) ?? 0;
-          const li = po.lineItems.find((l) => l.skuId === skuId);
-          const grnLi = po.grnRecord!.lineItems.find((l) => l.skuId === skuId);
-          return {
-            skuId,
-            internalCode: li?.sku.internalCode ?? grnLi?.skuId ?? skuId,
-            name: li?.sku.name ?? "—",
-            channelSkuCode: li?.channelSkuCode ?? null,
-            ordered,
-            received,
-            variance: received - ordered,
-          };
-        });
-      })()
-    : null;
-
-  const grnIsPerfect = grnVariances != null && grnVariances.every((v) => v.variance === 0);
+  const grnIsPerfect = po.grnRecord != null && po.lineItems.every((li) => {
+    const received = receivedBySku.get(li.skuId) ?? 0;
+    return received === li.requestedQty;
+  });
 
   return (
     <>
@@ -137,230 +120,147 @@ export default async function OrderDetailPage({ params }: { params: { id: string
           </CardContent>
         </Card>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
-          {/* Line items */}
-          <div className="space-y-6">
-            <Card>
-              <CardHeader className="flex-row items-center justify-between space-y-0">
-                <CardTitle>Items · {po.lineItems.length}</CardTitle>
-                {!isReceived && (
-                  <Button variant="outline" size="sm" asChild>
-                    <Link href={`/allocate/${po.id}`}>Allocate this PO</Link>
-                  </Button>
-                )}
-              </CardHeader>
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead>Item ID</TableHead>
-                      <TableHead>Product</TableHead>
-                      <TableHead>UOM</TableHead>
-                      <TableHead className="text-right">Ordered</TableHead>
-                      <TableHead className="text-right">Received (GRN)</TableHead>
-                      <TableHead className="text-right">Allocated</TableHead>
-                      <TableHead className="text-right">Fill</TableHead>
-                      <TableHead className="text-right">Taxable/unit</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {po.lineItems.map((li) => {
-                      const raw = (li.rawData as Record<string, string> | null) ?? {};
-                      const received = receivedBySku.get(li.skuId);
-                      const ordered = li.requestedQty;
-                      const lineFill = fillBySku.get(li.skuId);
-                      const assigned = lineFill?.assigned ?? null;
-                      // Delivered POs show gross fill (delivered ÷ ordered); pre-delivery POs
-                      // show allocation progress (assigned ÷ ordered).
-                      const fillPct = isReceived
-                        ? lineFill?.grossPct ?? null
-                        : assigned != null && ordered > 0
-                          ? (assigned / ordered) * 100
-                          : null;
-                      const tone =
-                        fillPct == null ? "text-muted-foreground"
-                          : fillPct >= 100 ? "text-success"
-                          : fillPct > 0 ? "text-warning"
-                          : "text-danger";
-                      const tv = taxByLine.get(li.id);
-                      return (
-                        <TableRow key={li.id} className={tv?.mismatch ? "bg-amber-50/50 dark:bg-amber-950/10" : undefined}>
-                          <TableCell className="font-mono text-xs">{li.channelSkuCode ?? li.sku.internalCode}</TableCell>
-                          <TableCell className="max-w-[280px]">
-                            <div className="truncate text-sm">{li.sku.name}</div>
-                          </TableCell>
-                          <TableCell className="text-muted-foreground">{raw.uom_text ?? li.sku.uom}</TableCell>
-                          <TableCell className="text-right nums font-medium">{ordered}</TableCell>
-                          <TableCell className="text-right nums">
-                            {received != null ? received : <span className="text-muted-foreground">—</span>}
-                          </TableCell>
-                          <TableCell className="text-right nums">
-                            {assigned != null ? assigned : <span className="text-muted-foreground">—</span>}
-                          </TableCell>
-                          <TableCell className={cn("text-right nums font-medium", tone)}>
-                            {fillPct != null ? `${Math.round(fillPct)}%` : "—"}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {tv?.mismatch ? (
-                              <span
-                                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
-                                title={tv.reason}
-                              >
-                                <AlertTriangle className="h-3 w-3" />
-                                ₹{tv.actual?.toFixed(2) ?? "?"} / exp ₹{tv.expected?.toFixed(2) ?? "?"}
-                              </span>
-                            ) : tv?.actual != null ? (
-                              <span className="nums text-sm text-muted-foreground">₹{tv.actual.toFixed(2)}</span>
-                            ) : (
-                              <span className="text-muted-foreground">—</span>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-
-            {/* Ordered vs Received (GRN) breakdown */}
-            {po.grnRecord && grnVariances && (
-              <Card id="grn">
-                <CardHeader>
-                  <CardTitle className="flex flex-wrap items-center gap-2">
-                    <PackageCheck className="h-4 w-4 text-muted-foreground" />
-                    Ordered vs Received · GRN
-                    {/* Gross = delivered ÷ ordered */}
+        <div className="space-y-6">
+          {/* Combined line items + GRN table */}
+          <Card>
+            <CardHeader className="flex-row items-center justify-between space-y-0 flex-wrap gap-2">
+              <CardTitle className="flex flex-wrap items-center gap-2">
+                Items · {po.lineItems.length}
+                {isReceived && (
+                  <>
                     <Badge
                       variant={grnIsPerfect ? "success" : fill.grossPct != null && fill.grossPct < 80 ? "danger" : "warning"}
-                      className="ml-2"
+                      className="ml-1"
                     >
                       Gross {fill.grossPct ?? 0}%{grnIsPerfect ? " · Perfect" : ""}
                     </Badge>
-                    {/* Net = delivered ÷ assigned (team allocation or scraped ASN) */}
                     {fill.netPct != null ? (
                       <Badge variant={fill.netPct < 80 ? "danger" : fill.netPct >= 100 ? "success" : "warning"}>
                         Net {fill.netPct}%
                       </Badge>
                     ) : (
-                      <Badge variant="outline" className="text-muted-foreground" title="No assigned/ASN quantity yet — allocate this PO or scrape the channel's ASN to populate net fill.">
+                      <Badge variant="outline" className="text-muted-foreground" title="No assigned/ASN quantity yet.">
                         Net —
                       </Badge>
                     )}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="p-0">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="hover:bg-transparent">
-                        <TableHead>SKU</TableHead>
-                        <TableHead>Product</TableHead>
-                        <TableHead className="text-right">Ordered</TableHead>
-                        <TableHead className="text-right">Received</TableHead>
-                        <TableHead className="text-right">Variance</TableHead>
+                  </>
+                )}
+              </CardTitle>
+              {!isReceived && (
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={`/allocate/${po.id}`}>Allocate this PO</Link>
+                </Button>
+              )}
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>SKU</TableHead>
+                    <TableHead>Product</TableHead>
+                    <TableHead className="text-right">Ordered</TableHead>
+                    <TableHead className="text-right">Received</TableHead>
+                    <TableHead className="text-right">Allocated</TableHead>
+                    <TableHead className="text-right">Fill</TableHead>
+                    <TableHead className="text-right">Variance</TableHead>
+                    <TableHead className="text-right">Taxable/unit</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {po.lineItems.map((li) => {
+                    const received = receivedBySku.get(li.skuId);
+                    const ordered = li.requestedQty;
+                    const lineFill = fillBySku.get(li.skuId);
+                    const assigned = lineFill?.assigned ?? null;
+                    const fillPct = isReceived
+                      ? lineFill?.grossPct ?? null
+                      : assigned != null && ordered > 0
+                        ? (assigned / ordered) * 100
+                        : null;
+                    const fillTone =
+                      fillPct == null ? "text-muted-foreground"
+                        : fillPct >= 100 ? "text-success"
+                        : fillPct > 0 ? "text-warning"
+                        : "text-danger";
+                    const variance = received != null ? received - ordered : null;
+                    const varianceTone =
+                      variance == null ? ""
+                        : variance === 0 ? "text-success"
+                        : variance < 0 ? "text-danger"
+                        : "text-warning";
+                    const tv = taxByLine.get(li.id);
+                    return (
+                      <TableRow key={li.id} className={tv?.mismatch ? "bg-amber-50/50 dark:bg-amber-950/10" : undefined}>
+                        <TableCell className="font-mono text-xs">{li.sku.internalCode}</TableCell>
+                        <TableCell className="max-w-[280px]">
+                          <div className="truncate text-sm">{li.sku.name}</div>
+                        </TableCell>
+                        <TableCell className="text-right nums font-medium">{ordered}</TableCell>
+                        <TableCell className="text-right nums">
+                          {received != null ? received : <span className="text-muted-foreground">—</span>}
+                        </TableCell>
+                        <TableCell className="text-right nums">
+                          {assigned != null ? assigned : <span className="text-muted-foreground">—</span>}
+                        </TableCell>
+                        <TableCell className={cn("text-right nums font-medium", fillTone)}>
+                          {fillPct != null ? `${Math.round(fillPct)}%` : "—"}
+                        </TableCell>
+                        <TableCell className={cn("text-right nums font-medium", varianceTone)}>
+                          {variance == null ? "—" : variance === 0 ? "—" : variance > 0 ? `+${variance}` : variance}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {tv?.mismatch ? (
+                            <span
+                              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                              title={tv.reason}
+                            >
+                              <AlertTriangle className="h-3 w-3" />
+                              ₹{tv.actual?.toFixed(2) ?? "?"} / exp ₹{tv.expected?.toFixed(2) ?? "?"}
+                            </span>
+                          ) : tv?.actual != null ? (
+                            <span className="nums text-sm text-muted-foreground">₹{tv.actual.toFixed(2)}</span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {grnVariances.map((v) => {
-                        const tone =
-                          v.variance === 0 ? "text-success"
-                            : v.variance < 0 ? "text-danger"
-                            : "text-warning";
-                        return (
-                          <TableRow key={v.skuId} className={v.variance !== 0 ? "bg-muted/30" : undefined}>
-                            <TableCell className="font-mono text-xs">
-                              {v.channelSkuCode ?? v.internalCode}
-                            </TableCell>
-                            <TableCell>
-                              <div className="text-sm">{v.name}</div>
-                              {v.channelSkuCode && (
-                                <div className="text-xs text-muted-foreground">{v.internalCode}</div>
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right nums">{v.ordered}</TableCell>
-                            <TableCell className="text-right nums">{v.received}</TableCell>
-                            <TableCell className={cn("text-right nums font-medium", tone)}>
-                              {v.variance === 0 ? "—" : v.variance > 0 ? `+${v.variance}` : v.variance}
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-            )}
-
-            {(po.dispatchRecord || po.invoice) && (
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                {po.dispatchRecord && (
-                  <Card className="p-5">
-                    <div className="flex items-center gap-2 text-sm font-semibold">
-                      <Truck className="h-4 w-4 text-muted-foreground" /> Dispatch
-                    </div>
-                    <Separator className="my-3" />
-                    <dl className="space-y-1.5 text-sm">
-                      <Row k="AWB" v={po.dispatchRecord.awbNumber ?? "—"} />
-                      <Row k="Carrier" v={po.dispatchRecord.carrierName ?? "—"} />
-                      <Row k="Dispatched" v={formatDateTime(po.dispatchRecord.dispatchedAt)} />
-                    </dl>
-                  </Card>
-                )}
-                {po.invoice && (
-                  <Card className="p-5">
-                    <div className="flex items-center gap-2 text-sm font-semibold">
-                      <FileText className="h-4 w-4 text-muted-foreground" /> Invoice
-                    </div>
-                    <Separator className="my-3" />
-                    <dl className="space-y-1.5 text-sm">
-                      <Row k="Number" v={po.invoice.invoiceNumber} />
-                      <Row k="Amount" v={formatINR(po.invoice.totalAmount, { decimals: true })} />
-                      <Row k="GST" v={formatINR(po.invoice.gstAmount, { decimals: true })} />
-                    </dl>
-                  </Card>
-                )}
-              </div>
-            )}
-
-            {po.rawData && typeof po.rawData === "object" && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Source data · {po.source}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-1 gap-x-8 gap-y-1.5 sm:grid-cols-2">
-                    {Object.entries(po.rawData as Record<string, unknown>)
-                      .filter(([, v]) => {
-                        if (v == null) return false;
-                        if (typeof v === "object" && !Array.isArray(v)) return false;
-                        const s = String(v);
-                        return s.trim() !== "" && s !== "[object Object]";
-                      })
-                      .map(([k, v]) => {
-                        const arr = v as unknown[];
-                        const display = Array.isArray(v)
-                          ? `${arr.length} item${arr.length !== 1 ? "s" : ""}`
-                          : String(v);
-                        return (
-                          <div key={k} className="flex justify-between gap-3 border-b border-border/40 py-1 text-sm">
-                            <span className="text-muted-foreground">{k}</span>
-                            <span className="text-right font-medium">{display}</span>
-                          </div>
-                        );
-                      })}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </div>
-
-          {/* Timeline */}
-          <Card className="h-fit">
-            <CardHeader><CardTitle>Timeline</CardTitle></CardHeader>
-            <CardContent>
-              <OrderTimeline events={po.auditLogs} />
+                    );
+                  })}
+                </TableBody>
+              </Table>
             </CardContent>
           </Card>
+
+          {(po.dispatchRecord || po.invoice) && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {po.dispatchRecord && (
+                <Card className="p-5">
+                  <div className="flex items-center gap-2 text-sm font-semibold">
+                    <Truck className="h-4 w-4 text-muted-foreground" /> Dispatch
+                  </div>
+                  <Separator className="my-3" />
+                  <dl className="space-y-1.5 text-sm">
+                    <Row k="AWB" v={po.dispatchRecord.awbNumber ?? "—"} />
+                    <Row k="Carrier" v={po.dispatchRecord.carrierName ?? "—"} />
+                    <Row k="Dispatched" v={formatDateTime(po.dispatchRecord.dispatchedAt)} />
+                  </dl>
+                </Card>
+              )}
+              {po.invoice && (
+                <Card className="p-5">
+                  <div className="flex items-center gap-2 text-sm font-semibold">
+                    <FileText className="h-4 w-4 text-muted-foreground" /> Invoice
+                  </div>
+                  <Separator className="my-3" />
+                  <dl className="space-y-1.5 text-sm">
+                    <Row k="Number" v={po.invoice.invoiceNumber} />
+                    <Row k="Amount" v={formatINR(po.invoice.totalAmount, { decimals: true })} />
+                    <Row k="GST" v={formatINR(po.invoice.gstAmount, { decimals: true })} />
+                  </dl>
+                </Card>
+              )}
+            </div>
+          )}
         </div>
       </main>
     </>

@@ -19,7 +19,11 @@ export function handler(
       return await fn();
     } catch (error) {
       console.error(`[${routeName}]`, error);
-      const status = error instanceof Error && error.message === "Unauthorized" ? 401 : 500;
+      let status = 500;
+      if (error instanceof Error) {
+        if (error.message === "Unauthorized") status = 401;
+        else if (error.name === "AdminRequiredError") status = 403;
+      }
       return fail(error, status);
     }
   })();

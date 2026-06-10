@@ -1,4 +1,4 @@
-import { EXPECTED_TAXABLE_VALUE } from "@/lib/sku-master-data";
+import { skuMasterMaps } from "@/lib/sku-master-runtime";
 import { isSkuMapped } from "@/lib/services/sku-resolver";
 
 export interface TaxableLineResult {
@@ -128,7 +128,7 @@ type PoWithLines = {
 };
 
 export function validatePoTaxables(po: PoWithLines): TaxableValidationResult {
-  const channelExpected = EXPECTED_TAXABLE_VALUE[channelKey(po.channel.name)] ?? {};
+  const channelExpected = skuMasterMaps().expectedTaxable[channelKey(po.channel.name)] ?? {};
 
   // Self-calibrate unmapped detection. We only flag a line as a new/unknown SKU when
   // the channel's mapping is demonstrably AUTHORITATIVE for this PO — i.e. it already
