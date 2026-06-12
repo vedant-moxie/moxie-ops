@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 
 /**
  * Toolbar that sits above the main data tables. Replaces the old big filter bar
@@ -13,12 +12,6 @@ import { cn } from "@/lib/utils";
  */
 
 export type TableDensity = "compact" | "normal" | "comfortable";
-
-const DENSITY_OPTIONS: { value: TableDensity; label: string }[] = [
-  { value: "compact", label: "Compact" },
-  { value: "normal", label: "Normal" },
-  { value: "comfortable", label: "Comfortable" },
-];
 
 /**
  * Tailwind classes applied to the <Table> for a given density. `whitespace-nowrap`
@@ -66,40 +59,6 @@ export function useTableDensity(
   return [density, update];
 }
 
-/** Segmented compact / normal / comfortable size control. */
-export function TableDensityControl({
-  value,
-  onChange,
-}: {
-  value: TableDensity;
-  onChange: (d: TableDensity) => void;
-}) {
-  return (
-    <div
-      className="inline-flex items-center rounded-lg border border-border/70 p-0.5"
-      role="group"
-      aria-label="Table size"
-    >
-      {DENSITY_OPTIONS.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          onClick={() => onChange(o.value)}
-          aria-pressed={value === o.value}
-          className={cn(
-            "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-            value === o.value
-              ? "bg-muted text-foreground"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 export interface FilterChipDef {
   key: string;
   label: string;
@@ -123,8 +82,6 @@ function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }
 }
 
 export function TableToolbar({
-  density,
-  onDensityChange,
   chips,
   onClearAll,
   count,
@@ -132,8 +89,6 @@ export function TableToolbar({
   noun = "rows",
   children,
 }: {
-  density: TableDensity;
-  onDensityChange: (d: TableDensity) => void;
   chips: FilterChipDef[];
   onClearAll: () => void;
   count: number;
@@ -144,7 +99,6 @@ export function TableToolbar({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2 px-5 pb-3 pt-1">
-      <TableDensityControl value={density} onChange={onDensityChange} />
       {chips.map((c) => (
         <FilterChip key={c.key} label={c.label} onRemove={c.onRemove} />
       ))}

@@ -47,7 +47,7 @@ export interface AllocRow {
 
 export function AllocationList({ rows }: { rows: AllocRow[] }) {
   const router = useRouter();
-  const [density, setDensity] = useTableDensity("allocation-table-density");
+  const [density] = useTableDensity("allocation-table-density");
   const [q, setQ] = useState("");
   const [channelSlug, setChannelSlug] = useState("all");
   const [status, setStatus] = useState("all");
@@ -195,8 +195,6 @@ export function AllocationList({ rows }: { rows: AllocRow[] }) {
   return (
     <div>
       <TableToolbar
-        density={density}
-        onDensityChange={setDensity}
         chips={chips}
         onClearAll={clearFilters}
         count={filtered.length}

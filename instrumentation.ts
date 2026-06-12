@@ -1,7 +1,7 @@
 /**
  * Next.js instrumentation — runs once when the server process boots.
  * We use it to start the background channel auto-syncs (Blinkit / Zepto /
- * Instamart / Nykaa — every 3h by default each).
+ * Instamart / Nykaa) and the WMS stock auto-sync — every 3h by default each.
  * Guarded to the Node.js runtime so it never runs in the edge/middleware bundle.
  */
 export async function register() {
@@ -38,5 +38,11 @@ export async function register() {
     startNykaaAutoSync();
   } catch (e) {
     console.error("[instrumentation] failed to start Nykaa auto-sync", e);
+  }
+  try {
+    const { startWmsStockAutoSync } = await import("@/lib/services/wms-stock-scheduler");
+    startWmsStockAutoSync();
+  } catch (e) {
+    console.error("[instrumentation] failed to start WMS stock auto-sync", e);
   }
 }

@@ -3,13 +3,14 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, Loader2, Wand2, PackageCheck, Mail, Trash2, Undo2, Warehouse } from "lucide-react";
+import { AlertTriangle, Loader2, Wand2, Mail, Trash2, Undo2, Warehouse, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { cn, formatNumber } from "@/lib/utils";
+import { SkuMappingReview } from "@/components/allocation/sku-mapping-review";
 
 export interface WarehouseStockEntry {
   warehouseCode: string;
@@ -31,6 +32,9 @@ interface Line {
   approvedQty: number | null;
   rawData: Record<string, string> | null;
   sku: { internalCode: string; name: string; uom: string };
+  /** Internal/master SKU code resolved server-side; falls back to the raw
+   *  platform code for still-unmapped SKUs (which carry the `unmapped` flag). */
+  displaySkuCode?: string;
   flag?: { mismatch: boolean; unmapped: boolean; reason: string } | null;
 }
 
@@ -43,6 +47,7 @@ export function PoAllocator({
   dispatchWarehouseName = null,
   hasTaxableMismatch = false,
   lockedByOther = false,
+  unmappedSkuIds = [],
 }: {
   poId: string;
   lines: Line[];
@@ -53,6 +58,8 @@ export function PoAllocator({
   dispatchWarehouseName?: string | null;
   hasTaxableMismatch?: boolean;
   lockedByOther?: boolean;
+  /** SKU IDs that have no WMS stock and need AI mapping */
+  unmappedSkuIds?: string[];
 }) {
   const router = useRouter();
   // Locked = another user holds the claim. Starts from the server's view, and the
@@ -86,7 +93,26 @@ export function PoAllocator({
     Object.fromEntries(lines.map((l) => [l.skuId, String(l.approvedQty ?? l.requestedQty ?? 0)])),
   );
   const [saving, setSaving] = useState(false);
+  const [syncingStock, setSyncingStock] = useState(false);
   const [confirmSend, setConfirmSend] = useState(false);
+
+  // Pull fresh WMS stock on demand, then hard-reload so the server re-runs
+  // readWarehouseStock with the refreshed mirror (router.refresh alone doesn't
+  // fully bust the Next.js 14 route cache for this page's server data).
+  async function syncStock() {
+    setSyncingStock(true);
+    const t = toast.loading("Refreshing WMS stock…");
+    try {
+      const res = await fetch("/api/wms/sync", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || "Sync failed");
+      toast.success(`WMS stock refreshed — ${json.data.rows} rows`, { id: t });
+      window.location.reload();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "WMS sync failed", { id: t });
+      setSyncingStock(false);
+    }
+  }
   // SKUs removed from this allocation (e.g. unmapped / not-for-sale) — excluded
   // from the saved allocation and the prep email.
   const [removed, setRemoved] = useState<Set<string>>(new Set());
@@ -108,11 +134,10 @@ export function PoAllocator({
     setAlloc(Object.fromEntries(lines.map((l) => [l.skuId, l.requestedQty])));
     setRawInputs(Object.fromEntries(lines.map((l) => [l.skuId, String(l.requestedQty)])));
   };
-  const matchReceived = () => {
-    const nums = Object.fromEntries(lines.map((l) => [l.skuId, receivedBySku[l.skuId] ?? 0]));
-    setAlloc(nums);
-    setRawInputs(Object.fromEntries(Object.entries(nums).map(([k, v]) => [k, String(v)])));
-  };
+
+  // Which warehouse's free stock the table shows. Defaults to the GSTIN-resolved
+  // dispatch warehouse (how it's auto-selected) but is clickable to view any other.
+  const [selectedWarehouse, setSelectedWarehouse] = useState<string | null>(dispatchWarehouseCode);
 
   const totalOrdered = lines.reduce((s, l) => s + l.requestedQty, 0);
   const totalAlloc = lines.reduce((s, l) => s + (removed.has(l.skuId) ? 0 : alloc[l.skuId] ?? 0), 0);
@@ -132,10 +157,10 @@ export function PoAllocator({
   }
   const hasWarehouseData = whTotals.size > 0;
 
-  /** Free stock for one line at the dispatch warehouse (null when unknown). */
-  const freeAtDispatch = (skuId: string): number | null => {
-    if (!dispatchWarehouseCode) return null;
-    const e = (warehouseStock[skuId] ?? []).find((x) => x.warehouseCode === dispatchWarehouseCode);
+  /** Free stock for one line at the selected warehouse (null when none selected). */
+  const freeAtSelected = (skuId: string): number | null => {
+    if (!selectedWarehouse) return null;
+    const e = (warehouseStock[skuId] ?? []).find((x) => x.warehouseCode === selectedWarehouse);
     return e ? e.freeQty : 0;
   };
 
@@ -175,20 +200,36 @@ export function PoAllocator({
 
   return (
     <div className="space-y-4">
+      {unmappedSkuIds.length > 0 && (
+        <SkuMappingReview
+          skuIds={unmappedSkuIds}
+          onResolved={() => {
+            // router.refresh() doesn't fully bust the Next.js 14 route cache;
+            // hard-reload the same URL so the server re-runs readWarehouseStock
+            // with the newly confirmed SkuItemMappings in the DB.
+            window.location.reload();
+          }}
+        />
+      )}
       {hasWarehouseData && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-4 py-2.5">
           <Warehouse className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="text-xs font-medium text-muted-foreground">Free stock:</span>
           {[...whTotals.entries()].map(([code, wh]) => {
+            const isSelected = code === selectedWarehouse;
             const isDispatch = code === dispatchWarehouseCode;
             return (
-              <span
+              <button
+                type="button"
                 key={code}
+                onClick={() => setSelectedWarehouse(code)}
+                title={`Show free stock at ${wh.name}`}
+                aria-pressed={isSelected}
                 className={cn(
-                  "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs",
-                  isDispatch
-                    ? "border-emerald-400 bg-emerald-50 dark:border-emerald-700 dark:bg-emerald-950/40"
-                    : "border-border/60 bg-card",
+                  "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors",
+                  isSelected
+                    ? "border-emerald-400 bg-emerald-50 ring-1 ring-emerald-400/40 dark:border-emerald-700 dark:bg-emerald-950/40"
+                    : "border-border/60 bg-card hover:border-emerald-300 hover:bg-emerald-50/60 dark:hover:bg-emerald-950/20",
                 )}
               >
                 <span className="font-mono font-semibold">{code}</span>
@@ -200,24 +241,35 @@ export function PoAllocator({
                     ships this PO
                   </Badge>
                 )}
-              </span>
+              </button>
             );
           })}
-          <span className="ml-auto text-[11px] text-muted-foreground">
-            {dispatchWarehouseName
-              ? `Ships from ${dispatchWarehouseName} (PO GSTIN)`
-              : "Shipping warehouse unknown — no GSTIN match"}
-            {stockSyncedAt ? ` · WMS sync ${new Date(stockSyncedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}` : ""}
-          </span>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-[11px] text-muted-foreground">
+              {dispatchWarehouseName
+                ? `Ships from ${dispatchWarehouseName} (PO GSTIN)`
+                : "Shipping warehouse unknown — no GSTIN match"}
+              {" · click a warehouse to view its stock"}
+              {stockSyncedAt ? ` · WMS sync ${new Date(stockSyncedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false })}` : ""}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={syncStock}
+              disabled={syncingStock}
+              title="Pull the latest free stock from the WMS Consolidated MIS report"
+              className="h-7 gap-1.5 px-2 text-xs"
+            >
+              {syncingStock ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              Refresh stock
+            </Button>
+          </div>
         </div>
       )}
 
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="outline" size="sm" onClick={fillOrdered}>
           <Wand2 className="h-4 w-4" /> Fill all to ordered
-        </Button>
-        <Button variant="outline" size="sm" onClick={matchReceived}>
-          <PackageCheck className="h-4 w-4" /> Match received
         </Button>
         <div className="ml-auto text-sm text-muted-foreground">
           Allocating <span className="font-semibold text-foreground nums">{formatNumber(totalAlloc)}</span> of{" "}
@@ -239,7 +291,7 @@ export function PoAllocator({
               <TableHead className="text-right">Received</TableHead>
               {hasWarehouseData && (
                 <TableHead className="text-right">
-                  {dispatchWarehouseCode ? `Free @ ${dispatchWarehouseCode}` : "Free stock"}
+                  {selectedWarehouse ? `Free @ ${selectedWarehouse}` : "Free stock"}
                 </TableHead>
               )}
               <TableHead className="text-right">Allocate</TableHead>
@@ -257,7 +309,7 @@ export function PoAllocator({
                   : "border-warning";
               return (
                 <TableRow key={l.id} className={cn(isRemoved && "opacity-50")}>
-                  <TableCell className="font-mono text-xs">{l.channelSkuCode ?? l.sku.internalCode}</TableCell>
+                  <TableCell className="font-mono text-xs">{l.displaySkuCode ?? l.sku.internalCode}</TableCell>
                   <TableCell className="max-w-[320px]">
                     <div className={cn("truncate text-sm", isRemoved && "line-through")}>{l.sku.name}</div>
                     {l.flag?.unmapped && (
@@ -278,10 +330,10 @@ export function PoAllocator({
                   </TableCell>
                   {hasWarehouseData && (() => {
                     const entries = warehouseStock[l.skuId] ?? [];
-                    // Judge availability at the shipping warehouse when known,
+                    // Judge availability at the selected warehouse when one is chosen,
                     // otherwise against the total across warehouses.
-                    const atDispatch = freeAtDispatch(l.skuId);
-                    const available = atDispatch ?? entries.reduce((s, e) => s + e.freeQty, 0);
+                    const atSelected = freeAtSelected(l.skuId);
+                    const available = atSelected ?? entries.reduce((s, e) => s + e.freeQty, 0);
                     const qty = alloc[l.skuId] ?? 0;
                     const sufficient = available >= qty && qty > 0;
                     const tooltipLines = entries.length > 0

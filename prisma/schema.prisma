@@ -53,6 +53,7 @@ model Sku {
   grnLineItems       GrnLineItem[]
   discrepancies      Discrepancy[]
   inventorySnapshots InventorySnapshot[]
+  itemMapping        SkuItemMapping?
 }
 
 /// Editable SKU master — the single source of truth for channel-SKU mappings and
@@ -74,6 +75,17 @@ model SkuMaster {
   nykaaCode     String?
   instamartCode String?
   blinkitCode   String?
+  // Tira: the SAP "Tira Code (SAP)" (e.g. "494619783") that appears as productCode
+  // on Tira PO lines. ean is the universal barcode (Moxie GS1 prefix 890617003…).
+  tiraCode      String?
+  ean           String?
+  // Standard-platform listing IDs from the Beauty Comm "Product Master" sheet.
+  // *Code columns are the platform's own listing SKU; *Pids are the numeric
+  // product IDs that appear on those platforms' PO/catalog rows.
+  myntraCode    String? // Myntra style/listing code, e.g. "33509564"
+  purplleCode   String? // Purplle listing code, e.g. "PPLB8906170030002"
+  nykaaPids     String? // Nykaa product ID(s), e.g. "16853282"
+  purpllePids   String? // Purplle product ID(s), e.g. "409741"
 
   // Per-channel expected unit taxable value (excl. GST)
   taxableZepto     Float?
@@ -92,6 +104,9 @@ model SkuMaster {
   @@index([zeptoCode])
   @@index([nykaaCode])
   @@index([instamartCode])
+  @@index([tiraCode])
+  @@index([myntraCode])
+  @@index([purplleCode])
 }
 
 model ChannelSku {
@@ -208,6 +223,28 @@ model InventorySnapshot {
   sku Sku @relation(fields: [skuId], references: [id])
 
   @@index([skuId, snapshotAt])
+}
+
+/// AI-resolved mapping from an unmapped Sku (internalCode = raw channel item ID)
+/// to the correct WMS warehouse SKU code. Written by the AI mapper on first allocation
+/// open; high-confidence mappings are auto-confirmed, low-confidence ones are flagged
+/// for human review in the "Review Mappings" step on the allocation page.
+model SkuItemMapping {
+  id             String    @id @default(cuid())
+  skuId          String    @unique
+  wmsCode        String    // WMS WarehouseStock.skuCode, e.g. "HRHM100"
+  wmsDescription String?   // best-guess description for display
+  confidence     Float     // 0–1 from the AI model
+  method         String    @default("ai") // "ai" | "manual"
+  needsReview    Boolean   @default(false) // true when confidence < 0.85
+  confirmedAt    DateTime? // set when user confirms (or auto-confirmed when confidence ≥ 0.85)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  sku Sku @relation(fields: [skuId], references: [id])
+
+  @@index([wmsCode])
+  @@index([needsReview])
 }
 
 /// Live per-warehouse saleable stock mirrored from the WMS Consolidated Stock

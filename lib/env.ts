@@ -185,6 +185,33 @@ const schema = z.object({
   NYKAA_OTP_EMAIL: z.string().optional(), // defaults to NYKAA_LOGIN_EMAIL
   NYKAA_OTP_APP_PASSWORD: z.string().optional(),
 
+  // ── Tira (Reliance Retail SRM portal — srm-rrscm.ril.com) ──────────────────
+  // Auth: Bearer JWT + MYSAPSSO2 cookie. JWT expires every 1 hour.
+  // Fast path: capture both from the browser network tab after logging in manually.
+  TIRA_PORTAL_TOKEN: z.string().optional(), // Bearer JWT from Authorization header
+  TIRA_PORTAL_COOKIE: z.string().optional(), // Full Cookie header (MYSAPSSO2=... + BIGip... + TS...)
+  // Auto-login credentials (when TIRA_PORTAL_TOKEN is not set)
+  TIRA_USER_ID: z.string().optional(), // e.g. RR88051402
+  TIRA_PASSWORD: z.string().optional(), // portal password
+  // Override the login endpoint if auto-login fails (default: /srm/api/auth/login)
+  TIRA_LOGIN_PATH: z.string().optional(),
+  // PO list: action header value for the /srm/po-data/api/v1/master endpoint.
+  // Confirmed: READ_ALL_PO_VIEW_AND_EXCEL_CONFIG (returns PO list + column config).
+  TIRA_PO_LIST_ACTION: z.string().optional(),
+  // POST body template (JSON). Placeholders: {since} {until} {page} {pageSize}.
+  TIRA_PO_LIST_BODY: z.string().optional(),
+  // Line-items endpoint (/purchase-order/items).
+  // Body template with {poId} placeholder. If unset, defaults to {purchaseOrderId: poId}.
+  // Capture the Payload tab from DevTools to confirm the exact field name.
+  TIRA_PO_ITEMS_BODY: z.string().optional(),
+  // Print/PDF endpoint (/purchase-orders/print).
+  // Body template with {poId} placeholder. If unset, defaults to {purchaseOrders: [poId]}.
+  TIRA_PO_PRINT_BODY: z.string().optional(),
+  TIRA_START_DATE: z.string().default("2026-06-01"),
+  // Background auto-sync — disabled by default until TIRA_PO_LIST_ACTION is confirmed.
+  TIRA_AUTO_SYNC: z.string().default("false"),
+  TIRA_SYNC_INTERVAL_HOURS: z.coerce.number().positive().default(6),
+
   // Test PO email (Gmail SMTP, FROM amritya@moxiebeauty.in)
   PO_TEST_EMAIL_SMTP_USER: z.string().default("amritya@moxiebeauty.in"),
   PO_TEST_EMAIL_SMTP_PASS: z.string().optional(), // Gmail app password (strip spaces)
@@ -212,6 +239,9 @@ const schema = z.object({
   WMS_PASSWORD: z.string().optional(),
   // Warehouse stock rows older than this trigger a re-sync on read
   WMS_STOCK_STALE_MINUTES: z.coerce.number().default(15),
+  // Background WMS stock auto-sync (mirrors the channel auto-syncs)
+  WMS_AUTO_SYNC: z.string().default("true"), // "false" to disable
+  WMS_SYNC_INTERVAL_HOURS: z.coerce.number().positive().default(3),
   // Manual overrides for the Outward LOI Report (auto-discovered by name if not set)
   WMS_OUTWARD_REPORT_ID: z.coerce.number().optional(),
   WMS_OUTWARD_REPORT_SP: z.string().optional(),
@@ -220,6 +250,11 @@ const schema = z.object({
   // WMS party codes per channel name: {"Blinkit":"25725800003702976","Zepto":"..."}
   WMS_PARTY_CODES: z.string().optional(),
   WMS_DEFAULT_PARTY_CODE: z.string().optional(),
+
+  // Gemini AI — used as last-resort fallback in the SKU item mapper when a Blinkit
+  // item ID has no entry in SkuMaster.blinkitCode. Model: gemini-2.0-flash (default).
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().default("gemini-2.0-flash"),
 
   // Cron
   CRON_SECRET: z.string().optional(),

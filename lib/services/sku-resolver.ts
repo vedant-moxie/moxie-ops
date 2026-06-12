@@ -5,9 +5,10 @@ type ChannelSource = string;
 /**
  * Resolves a channel-specific SKU code to the Moxie internal SKU code.
  *
- * source matches case-insensitively against BLINKIT / ZEPTO / INSTAMART / NYKAA.
- * Falls back to channelCode if no mapping exists (never blanks the column).
- * Reads the live SKU master cache (DB-backed on the server, file defaults otherwise).
+ * source matches case-insensitively against BLINKIT / ZEPTO / INSTAMART / NYKAA /
+ * MYNTRA / PURPLLE / TIRA (Reliance). Falls back to channelCode if no mapping
+ * exists (never blanks the column). Reads the live SKU master cache (DB-backed on
+ * the server, file defaults otherwise).
  */
 function mapFor(source: ChannelSource): Record<string, string> | null {
   const s = source.toUpperCase();
@@ -16,6 +17,9 @@ function mapFor(source: ChannelSource): Record<string, string> | null {
   if (s.includes("ZEPTO")) return maps.zeptoToInternal;
   if (s.includes("INSTAMART")) return maps.instamartToInternal;
   if (s.includes("NYKAA")) return maps.nykaaToInternal;
+  if (s.includes("MYNTRA")) return maps.myntraToInternal;
+  if (s.includes("PURPLLE")) return maps.purplleToInternal;
+  if (s.includes("TIRA") || s.includes("RELIANCE")) return maps.tiraToInternal;
   return null;
 }
 
@@ -49,7 +53,10 @@ export function isSkuMapped(source: ChannelSource, channelCode: string | null | 
  */
 export function resolveInternalSkuAnyChannel(channelCode: string): string {
   const maps = skuMasterMaps();
-  for (const map of [maps.blinkitToInternal, maps.zeptoToInternal, maps.instamartToInternal, maps.nykaaToInternal]) {
+  for (const map of [
+    maps.blinkitToInternal, maps.zeptoToInternal, maps.instamartToInternal, maps.nykaaToInternal,
+    maps.myntraToInternal, maps.purplleToInternal, maps.tiraToInternal,
+  ]) {
     const internal = map[channelCode];
     if (internal) return internal;
   }

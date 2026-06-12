@@ -69,6 +69,29 @@ export function SettingsTabs({
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<Date | null>(null);
+  const [wmsSyncing, setWmsSyncing] = useState(false);
+  const [wmsLastSync, setWmsLastSync] = useState<Date | null>(null);
+
+  async function syncWms() {
+    setWmsSyncing(true);
+    const t = toast.loading("Syncing WMS stock…");
+    try {
+      const res = await fetch("/api/wms/sync", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || "Sync failed");
+      const { rows, warehouses, skippedWarehouses } = json.data;
+      setWmsLastSync(new Date());
+      toast.success(
+        `WMS synced — ${rows} SKU rows across ${warehouses.length} warehouse(s)` +
+          (skippedWarehouses.length ? ` · ${skippedWarehouses.length} unmapped skipped` : ""),
+        { id: t },
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "WMS sync failed", { id: t });
+    } finally {
+      setWmsSyncing(false);
+    }
+  }
 
   async function saveChannel(form: Partial<Channel>) {
     if (!editing) return;
@@ -193,7 +216,27 @@ export function SettingsTabs({
       </TabsContent>
 
       {/* Warehouse */}
-      <TabsContent value="warehouse">
+      <TabsContent value="warehouse" className="space-y-6">
+        <Card>
+          <CardHeader><CardTitle className="text-base">WMS stock</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Refresh per-warehouse saleable stock from the WMS Consolidated Stock report.
+              Runs automatically on a schedule; use this when allocation is showing stale stock.
+            </p>
+            <div className="flex items-center gap-3">
+              <Button onClick={syncWms} disabled={wmsSyncing}>
+                {wmsSyncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                Sync WMS stock
+              </Button>
+              {wmsLastSync && (
+                <span className="text-sm text-muted-foreground">
+                  Last synced {formatDateTime(wmsLastSync)}
+                </span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
         <Card>
           <CardHeader><CardTitle className="text-base">Warehouse</CardTitle></CardHeader>
           <CardContent className="space-y-4">

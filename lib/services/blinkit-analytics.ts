@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
 import { resolveFields } from "@/lib/integrations/blinkit/fields";
+import { resolveInternalSku } from "@/lib/services/sku-resolver";
 
 const DAY = 86_400_000;
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
@@ -16,6 +17,9 @@ function readMoneyProto(raw: Record<string, unknown>, field: string): number | n
 
 export interface BlinkitPoItem {
   itemId: string;
+  /** Internal/master SKU code resolved from the platform id; falls back to the
+   *  raw platform id when the SKU isn't mapped yet. Use this for display. */
+  displaySkuCode: string;
   upc: string | null;
   name: string;
   uom: string | null;
@@ -192,6 +196,7 @@ export async function computeChannelInsights({
 
       items.push({
         itemId: l.channelSkuCode ?? l.sku.internalCode,
+        displaySkuCode: resolveInternalSku(source, l.channelSkuCode ?? l.sku.internalCode),
         upc: typeof lraw.upc === "string" ? lraw.upc : null,
         name: l.sku.name,
         uom: (typeof uomRaw === "string" ? uomRaw : null) ?? l.sku.uom ?? null,

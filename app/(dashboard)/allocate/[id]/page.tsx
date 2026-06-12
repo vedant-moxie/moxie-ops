@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/orders/status-badge";
 import { PoAllocator } from "@/components/allocation/po-allocator";
 import { getPoForAllocation } from "@/lib/data/queries";
 import { validatePoTaxables } from "@/lib/services/taxable-validation";
+import { resolveInternalSku } from "@/lib/services/sku-resolver";
 import { currentActor } from "@/lib/auth";
 import { isClaimedByOther } from "@/lib/services/po-claim";
 import { readWarehouseStock } from "@/lib/services/wms-stock-sync";
@@ -33,6 +34,19 @@ export default async function AllocatePoPage({ params }: { params: { id: string 
     readWarehouseStock(skuIds).catch(() => ({})),
     resolveDispatchFromForPo(po).catch(() => null),
   ]);
+
+  // SKUs that have no WMS stock entry AND whose internalCode looks like a raw channel item ID
+  // (all digits) are candidates for AI mapping. Surface them to the client so the review
+  // banner can offer to resolve them on demand.
+  const unmappedSkuIds = po.lineItems
+    .filter((l) => {
+      const entries = (warehouseStock as Record<string, unknown[]>)[l.skuId];
+      return (
+        (!entries || entries.length === 0) &&
+        /^\d{6,}$/.test(l.sku.internalCode)
+      );
+    })
+    .map((l) => l.skuId);
   const dispatchWarehouse = dispatch?.dispatchFrom
     ? warehouseByDispatchFrom(dispatch.dispatchFrom)
     : null;
@@ -71,7 +85,7 @@ export default async function AllocatePoPage({ params }: { params: { id: string 
               <ul className="mt-1 space-y-0.5 text-rose-700 dark:text-rose-400">
                 {taxValidation.lines.filter((l) => l.unmapped).map((l) => (
                   <li key={l.lineId}>
-                    <span className="font-mono">{l.channelSkuCode ?? l.sku}</span>
+                    <span className="font-mono">{resolveInternalSku(po.channel.name, l.channelSkuCode ?? l.sku)}</span>
                     {" — new/unknown SKU not in the "}{po.channel.name}{" master"}
                   </li>
                 ))}
@@ -88,7 +102,7 @@ export default async function AllocatePoPage({ params }: { params: { id: string 
               <ul className="mt-1 space-y-0.5 text-amber-700 dark:text-amber-400">
                 {mismatchLines.map((l) => (
                   <li key={l.lineId}>
-                    <span className="font-mono">{l.channelSkuCode ?? l.sku}</span>
+                    <span className="font-mono">{resolveInternalSku(po.channel.name, l.channelSkuCode ?? l.sku)}</span>
                     {" — "}{l.reason}
                   </li>
                 ))}
@@ -115,6 +129,10 @@ export default async function AllocatePoPage({ params }: { params: { id: string 
             return {
               ...l,
               rawData: (l.rawData as Record<string, string> | null),
+              // Internal/master SKU code for display — resolved server-side where the
+              // DB-backed master maps are live (the client bundle only has file defaults).
+              // Falls back to the raw platform code for still-unmapped SKUs (flagged below).
+              displaySkuCode: resolveInternalSku(po.channel.name, l.channelSkuCode ?? l.sku.internalCode),
               flag: f ? { mismatch: f.mismatch, unmapped: f.unmapped, reason: f.reason } : null,
             };
           })}
@@ -124,6 +142,7 @@ export default async function AllocatePoPage({ params }: { params: { id: string 
           dispatchWarehouseName={dispatchWarehouse?.wmsName ?? dispatch?.dispatchFrom ?? null}
           hasTaxableMismatch={taxValidation.hasTaxableMismatch}
           lockedByOther={lockedByOther}
+          unmappedSkuIds={unmappedSkuIds}
         />
       </main>
     </>

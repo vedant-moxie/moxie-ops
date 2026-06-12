@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { validatePoTaxables } from "@/lib/services/taxable-validation";
 import { computeFillRates } from "@/lib/services/fill-rate";
+import { grnPortalUrl } from "@/lib/services/portal-links";
 import { currentActor } from "@/lib/auth";
 import { isClaimedByOther } from "@/lib/services/po-claim";
 
@@ -257,6 +258,8 @@ export async function getGrns() {
         select: {
           id: true,
           channelPoNumber: true,
+          source: true,
+          rawData: true,
           channel: { select: { name: true, logoColor: true } },
           lineItems: {
             select: {
@@ -335,6 +338,7 @@ export async function getGrns() {
       receivedAt: r.receivedAt,
       totalAcceptedValue: r.totalAcceptedValue,
       po: { id: r.po.id, channelPoNumber: r.po.channelPoNumber, channel: r.po.channel },
+      portalUrl: grnPortalUrl(r.po.source, r.po.rawData),
       _count: { lineItems: r._count.lineItems },
       totalOrdered,
       totalReceived,

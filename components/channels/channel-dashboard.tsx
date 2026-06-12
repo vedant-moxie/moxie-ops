@@ -87,6 +87,24 @@ export function ChannelDashboard({
     }
   }
 
+  // Tira's SRM portal binds its session to the live browser (F5 + SAP SSO), so
+  // server-side sync is rejected with "Unauthorized session". Instead we hand the
+  // user a one-liner that loads the in-browser collector on the portal itself.
+  async function tiraCollect() {
+    const cmd = `fetch('${window.location.origin}/api/tira/collector').then(r=>r.text()).then(eval)`;
+    try {
+      await navigator.clipboard.writeText(cmd);
+      toast.success("Collector command copied", {
+        description:
+          "Switch to the Tira portal tab → open DevTools Console → paste & run. It pulls the POs and ingests them here.",
+        duration: 9000,
+      });
+    } catch {
+      toast.message("Paste this into the Tira portal console:", { description: cmd, duration: 15000 });
+    }
+    window.open("https://srm-rrscm.ril.com/purchase-order/new", "_blank", "noopener");
+  }
+
   async function sendTestEmail() {
     setBusy("testemail");
     const t = toast.loading("Sending test PO email…");
@@ -163,10 +181,17 @@ export function ChannelDashboard({
           <Download className="h-4 w-4" /> Download Excel
         </a>
       </Button>
-      <Button size="sm" onClick={liveSync} disabled={!!busy}>
-        {busy === "scan" || pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-        Sync from {channel.name}
-      </Button>
+      {channel.slug === "tira" ? (
+        <Button size="sm" onClick={tiraCollect} disabled={!!busy}>
+          <ClipboardList className="h-4 w-4" />
+          Collect from Tira
+        </Button>
+      ) : (
+        <Button size="sm" onClick={liveSync} disabled={!!busy}>
+          {busy === "scan" || pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          Sync from {channel.name}
+        </Button>
+      )}
       {channel.slug === "blinkit" && (
         <Button variant="outline" size="sm" onClick={sendTestEmail} disabled={!!busy}>
           {busy === "testemail" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
@@ -462,7 +487,7 @@ function PoTable({ rows }: { rows: ChannelInsights["pos"] }) {
                         <table className="w-full text-sm">
                           <thead>
                             <tr className="border-b border-border/60 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                              <th className="px-3 py-2">Item ID</th>
+                              <th className="px-3 py-2">SKU Code</th>
                               <th className="px-3 py-2">Product</th>
                               <th className="px-3 py-2">UOM</th>
                               <th className="px-3 py-2 text-right">Ordered</th>
@@ -474,7 +499,7 @@ function PoTable({ rows }: { rows: ChannelInsights["pos"] }) {
                           <tbody>
                             {po.items.map((it, i) => (
                               <tr key={it.itemId + i} className="border-b border-border/40 last:border-0">
-                                <td className="px-3 py-2 font-mono text-xs">{it.itemId}</td>
+                                <td className="px-3 py-2 font-mono text-xs">{it.displaySkuCode}</td>
                                 <td className="max-w-[280px] px-3 py-2"><div className="truncate">{it.name}</div></td>
                                 <td className="px-3 py-2 text-muted-foreground">{it.uom ?? "—"}</td>
                                 <td className="px-3 py-2 text-right nums font-medium">{formatNumber(it.ordered)}</td>

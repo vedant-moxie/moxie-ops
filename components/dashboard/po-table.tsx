@@ -46,7 +46,7 @@ export function PoTable({
   pos: PoRow[];
   showAllocateCta?: boolean;
 }) {
-  const [density, setDensity] = useTableDensity("po-table-density");
+  const [density] = useTableDensity("po-table-density");
   const [channelSlug, setChannelSlug] = useState("all");
   const [status, setStatus] = useState("all");
   const [priority, setPriority] = useState("all");
@@ -103,8 +103,6 @@ export function PoTable({
   return (
     <div>
       <TableToolbar
-        density={density}
-        onDensityChange={setDensity}
         chips={chips}
         onClearAll={clearFilters}
         count={filtered.length}

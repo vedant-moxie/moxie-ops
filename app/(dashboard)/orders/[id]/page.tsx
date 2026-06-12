@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/table";
 import { prisma } from "@/lib/db";
 import { validatePoTaxables } from "@/lib/services/taxable-validation";
+import { resolveInternalSku } from "@/lib/services/sku-resolver";
 import { computeFillRates } from "@/lib/services/fill-rate";
 import { cn, formatINR, formatDate, formatDateTime } from "@/lib/utils";
 
@@ -191,7 +192,7 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                     const tv = taxByLine.get(li.id);
                     return (
                       <TableRow key={li.id} className={tv?.mismatch ? "bg-amber-50/50 dark:bg-amber-950/10" : undefined}>
-                        <TableCell className="font-mono text-xs">{li.sku.internalCode}</TableCell>
+                        <TableCell className="font-mono text-xs">{resolveInternalSku(po.channel.name, li.channelSkuCode ?? li.sku.internalCode)}</TableCell>
                         <TableCell className="max-w-[280px]">
                           <div className="truncate text-sm">{li.sku.name}</div>
                         </TableCell>
