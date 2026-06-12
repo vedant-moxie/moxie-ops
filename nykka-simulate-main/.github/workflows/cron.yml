@@ -1,0 +1,146 @@
+name: Scheduled Nykaa Data Sync
+
+on:
+  schedule:
+    - cron: '30 13 * * *'  # 1:30 PM UTC (7:00 PM IST)
+  workflow_dispatch:
+
+jobs:
+  sync-data:
+    runs-on: ubuntu-latest
+    environment: Nykka
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+      
+      - name: Install Camoufox browser
+        run: npx camoufox fetch
+
+      # -----------------------------------------------------
+      # Check required secrets
+      # -----------------------------------------------------
+      - name: Check required secrets
+        env:
+          NYKAA_ACCESS_TOKEN_JSON: ${{ secrets.NYKAA_ACCESS_TOKEN_JSON }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          BQ_DATASET_ID: ${{ secrets.BQ_DATASET_ID }}
+          BQ_TABLE_ID: ${{ secrets.BQ_TABLE_ID }}
+          GMAIL_CREDENTIALS: ${{ secrets.GMAIL_CREDENTIALS }}
+          GMAIL_TOKEN: ${{ secrets.GMAIL_TOKEN }}
+          TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
+
+        run: |
+          echo "Validating secrets…"
+
+          if [ -z "$NYKAA_ACCESS_TOKEN_JSON" ]; then
+            echo "Error: NYKAA_ACCESS_TOKEN_JSON is not set"
+            exit 1
+          fi
+
+          if [ -z "$GCP_PROJECT_ID" ]; then
+            echo "Error: GCP_PROJECT_ID is not set"
+            exit 1
+          fi
+
+          if [ -z "$GCP_SERVICE_ACCOUNT_KEY" ]; then
+            echo "Error: GCP_SERVICE_ACCOUNT_KEY is not set"
+            exit 1
+          fi
+
+          if [ -z "$BQ_DATASET_ID" ]; then
+            echo "Error: BQ_DATASET_ID is not set"
+            exit 1
+          fi
+
+          if [ -z "$BQ_TABLE_ID" ]; then
+            echo "Error: BQ_TABLE_ID is not set"
+            exit 1
+          fi
+
+          if [ -z "$GMAIL_CREDENTIALS" ]; then
+            echo "Error: GMAIL_CREDENTIALS is not set"
+            exit 1
+          fi
+
+          if [ -z "$GMAIL_TOKEN" ]; then
+            echo "Error: GMAIL_TOKEN is not set"
+            exit 1
+          fi
+
+          echo "All secrets are configured ✔️"
+
+      # -----------------------------------------------------
+      # Write Google Cloud Service Account key to file
+      # -----------------------------------------------------
+      - name: Setup Google Cloud credentials
+        env:
+          GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+        run: |
+          # Write the JSON to a file
+          echo "$GCP_SERVICE_ACCOUNT_KEY" > ${{ github.workspace }}/gcp-service-account.json
+          # Export the path so your Node code can read it for BigQuery
+          echo "GOOGLE_APPLICATION_CREDENTIALS=${{ github.workspace }}/gcp-service-account.json" >> $GITHUB_ENV
+
+      # -----------------------------------------------------
+      # Setup Gmail Credentials (client_secret)
+      # -----------------------------------------------------
+      - name: Setup Gmail Credentials (client_secret)
+        env:
+          GMAIL_CREDENTIALS: ${{ secrets.GMAIL_CREDENTIALS }}
+        run: |
+          # Creates the file your main.js expects
+          echo "$GMAIL_CREDENTIALS" > gmail-credentials.json
+          
+      # -----------------------------------------------------
+      # Setup Gmail Token (user token)
+      # -----------------------------------------------------
+      - name: Setup Gmail Token (user token)
+        env:
+          GMAIL_TOKEN: ${{ secrets.GMAIL_TOKEN }}
+        run: |
+          # Creates the file your main.js expects
+          echo "$GMAIL_TOKEN" > gmail-token.json
+
+      # -----------------------------------------------------
+      # Nykaa token file
+      # -----------------------------------------------------
+      - name: Setup Nykaa access token
+        env:
+          NYKAA_ACCESS_TOKEN_JSON: ${{ secrets.NYKAA_ACCESS_TOKEN_JSON }}
+        run: |
+          echo "$NYKAA_ACCESS_TOKEN_JSON" > nykaa-access-token.json
+
+      # -----------------------------------------------------
+      # Run Data Sync
+      # -----------------------------------------------------
+      - name: Run Data Sync
+        env:
+          NYKAA_ACCESS_TOKEN_JSON: ${{ secrets.NYKAA_ACCESS_TOKEN_JSON }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          BQ_DATASET_ID: ${{ secrets.BQ_DATASET_ID }}
+          BQ_TABLE_ID: ${{ secrets.BQ_TABLE_ID }}
+          TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
+        run: |
+          echo "Starting Data Sync..."
+          chmod +x run-pipeline.sh
+          ./run-pipeline.sh
+
+      # -----------------------------------------------------
+      # Cleanup
+      # -----------------------------------------------------
+      - name: Cleanup
+        if: always()
+        run: |
+          # Remove all temporary files created in the workspace
+          rm -f ${{ github.workspace }}/gcp-service-account.json nykaa-access-token.json gmail-credentials.json gmail-token.json
+          echo "Cleanup completed"

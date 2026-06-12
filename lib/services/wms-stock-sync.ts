@@ -151,6 +151,41 @@ export async function readWarehouseStock(skuIds: string[]): Promise<WarehouseSto
       });
     }
   }
+
+  // For SKUs that still have no stock entries, check confirmed AI mappings.
+  // These are Blinkit item IDs not in BLINKIT_TO_INTERNAL that were resolved by the AI mapper.
+  const unmappedIds = skuIds.filter((id) => result[id]!.length === 0);
+  if (unmappedIds.length > 0) {
+    const confirmedMappings = await prisma.skuItemMapping.findMany({
+      where: { skuId: { in: unmappedIds }, confirmedAt: { not: null } },
+      select: { skuId: true, wmsCode: true },
+    });
+    if (confirmedMappings.length > 0) {
+      const mappedCodes = confirmedMappings.map((m) => m.wmsCode);
+      const mappedStockRows = await prisma.warehouseStock.findMany({
+        where: { skuCode: { in: mappedCodes } },
+      });
+      const stockByWmsCode = new Map<string, typeof mappedStockRows>();
+      for (const row of mappedStockRows) {
+        const arr = stockByWmsCode.get(row.skuCode) ?? [];
+        arr.push(row);
+        stockByWmsCode.set(row.skuCode, arr);
+      }
+      for (const mapping of confirmedMappings) {
+        for (const row of stockByWmsCode.get(mapping.wmsCode) ?? []) {
+          const wh = warehouseByCode(row.warehouseCode);
+          result[mapping.skuId]!.push({
+            warehouseCode: row.warehouseCode,
+            warehouseName: wh?.wmsName ?? row.warehouseCode,
+            freeQty: row.freeQty,
+            totalQty: row.totalQty,
+            syncedAt: row.syncedAt.toISOString(),
+          });
+        }
+      }
+    }
+  }
+
   for (const id of skuIds) {
     result[id]!.sort((a, b) => a.warehouseCode.localeCompare(b.warehouseCode));
   }

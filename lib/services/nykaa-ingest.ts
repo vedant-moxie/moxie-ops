@@ -118,22 +118,24 @@ export async function ingestLiveNykaaPOs(
 
   for (const po of pos) {
     const poNo = String(
-      po.poNumber ?? po.po_number ?? po.poId ?? po.po_id ?? po.id ?? po.purchaseOrderNumber ?? "",
+      // `pocode` is the Nykaa grid's PO identifier (e.g. "NHO1541539").
+      po.pocode ?? po.po_code ?? po.poNumber ?? po.po_number ?? po.poId ?? po.po_id ?? po.id ?? po.purchaseOrderNumber ?? "",
     ).trim();
     if (!poNo) {
       warnings.push(`Skipped Nykaa PO with no identifier`);
       continue;
     }
 
-    const poDate = epochOrIso(po.poDate ?? po.po_date ?? po.createdAt ?? po.created_at ?? po.orderDate);
+    // Nykaa grid fields: issue_date / total_quantity / total_amount.
+    const poDate = epochOrIso(po.issue_date ?? po.poDate ?? po.po_date ?? po.createdAt ?? po.created_at ?? po.orderDate ?? po.createDate);
     const expiryDate = epochOrIso(
-      po.expiryDate ?? po.expiry_date ?? po.deliveryDate ?? po.delivery_date ?? po.appointmentDate,
+      po.expiry_date ?? po.expiryDate ?? po.deliveryDate ?? po.delivery_date ?? po.appointmentDate,
     );
     const totalQty = Math.max(
       0,
-      Math.round(Number(po.totalQty ?? po.total_qty ?? po.quantity ?? po.totalQuantity ?? 0) || 0),
+      Math.round(Number(po.total_quantity ?? po.totalQty ?? po.total_qty ?? po.quantity ?? po.totalQuantity ?? 0) || 0),
     );
-    const totalValue = Number(po.poValue ?? po.totalValue ?? po.total_value ?? po.value ?? po.amount ?? 0) || null;
+    const totalValue = Number(po.total_amount ?? po.poValue ?? po.totalValue ?? po.total_value ?? po.value ?? po.amount ?? 0) || null;
     const statusRaw = String(po.status ?? po.poStatus ?? po.po_status ?? po.state ?? "");
 
     type LineSpec = {
@@ -150,10 +152,10 @@ export async function ingestLiveNykaaPOs(
     if (apiLines && apiLines.length > 0) {
       lineSpecs = apiLines.map((line, i) => {
         const rawCode = String(
-          line.skuCode ?? line.sku_code ?? line.itemCode ?? line.item_code ?? line.productCode ?? line.product_code ?? line.styleId ?? line.fsn ?? "",
+          line.skucode ?? line.skuCode ?? line.sku_code ?? line.itemCode ?? line.item_code ?? line.productCode ?? line.product_code ?? line.styleId ?? line.fsn ?? "",
         ).trim();
         const rawName = String(
-          line.skuName ?? line.sku_name ?? line.itemName ?? line.item_name ?? line.productName ?? line.product_name ?? line.title ?? "",
+          line.skuname ?? line.skuName ?? line.sku_name ?? line.itemName ?? line.item_name ?? line.productName ?? line.product_name ?? line.title ?? "",
         ).trim();
         const code =
           rawCode ||
@@ -162,11 +164,11 @@ export async function ingestLiveNykaaPOs(
         const name = rawName || code;
         const qty = Math.max(
           0,
-          Math.round(Number(line.quantity ?? line.qty ?? line.orderedQty ?? line.ordered_qty ?? line.poQty ?? line.po_qty ?? 0) || 0),
+          Math.round(Number(line.poqty ?? line.quantity ?? line.qty ?? line.orderedQty ?? line.ordered_qty ?? line.poQty ?? line.po_qty ?? 0) || 0),
         );
-        const grnRaw = line.grnQty ?? line.grn_qty ?? line.receivedQty ?? line.received_qty ?? null;
+        const grnRaw = line.receivedqty ?? line.grnQty ?? line.grn_qty ?? line.receivedQty ?? line.received_qty ?? null;
         const receivedQty = grnRaw != null ? Math.max(0, Math.round(Number(grnRaw) || 0)) : 0;
-        const unitPrice = Number(line.unitPrice ?? line.unit_price ?? line.price ?? line.costPrice ?? null) || null;
+        const unitPrice = Number(line.unitcost ?? line.unitPrice ?? line.unit_price ?? line.price ?? line.costPrice ?? null) || null;
         return { code, name, qty, receivedQty, unitPrice, rawData: line as Prisma.InputJsonValue };
       });
     } else {

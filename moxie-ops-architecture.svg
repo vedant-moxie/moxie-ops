@@ -1,0 +1,248 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="880" viewBox="0 0 900 880" role="img">
+  <title>Moxie Ops System Architecture</title>
+  <desc>Layered system architecture: Frontend, API, Services, Integrations, Data layers with Cron sidebar</desc>
+
+  <!-- Background -->
+  <rect width="900" height="880" rx="16" fill="#141414"/>
+
+  <!-- Title bar -->
+  <text x="36" y="48" font-family="-apple-system, sans-serif" font-size="20" font-weight="700" fill="#ffffff" letter-spacing="-0.4">Moxie Ops</text>
+  <rect x="126" y="30" width="170" height="22" rx="4" fill="#C8FF00"/>
+  <text x="132" y="45" font-family="-apple-system, sans-serif" font-size="10" font-weight="700" fill="#0f0f0f" letter-spacing="1.2">SYSTEM ARCHITECTURE</text>
+  <text x="36" y="68" font-family="-apple-system, sans-serif" font-size="11" fill="#666">D2C Operations Management System · v1.0 · June 2026</text>
+
+  <!-- Section label: Channel Partners -->
+  <text x="36" y="100" font-family="-apple-system, sans-serif" font-size="10" fill="#444" letter-spacing="1" text-transform="uppercase">CHANNEL PARTNERS</text>
+
+  <!-- Channel tags -->
+  <rect x="36" y="110" width="108" height="26" rx="13" fill="#1e1e1e" stroke="#2e2e2e" stroke-width="1"/>
+  <circle cx="53" cy="123" r="4" fill="#C8FF00"/>
+  <text x="62" y="127" font-family="-apple-system, sans-serif" font-size="11" fill="#aaa">Nykaa</text>
+  <text x="62" y="138" font-family="-apple-system, sans-serif" font-size="8" fill="#555">email + portal</text>
+
+  <rect x="152" y="110" width="108" height="26" rx="13" fill="#1e1e1e" stroke="#2e2e2e" stroke-width="1"/>
+  <circle cx="169" cy="123" r="4" fill="#C8FF00"/>
+  <text x="178" y="127" font-family="-apple-system, sans-serif" font-size="11" fill="#aaa">Blinkit</text>
+  <text x="178" y="138" font-family="-apple-system, sans-serif" font-size="8" fill="#555">API + CSV</text>
+
+  <rect x="268" y="110" width="108" height="26" rx="13" fill="#1e1e1e" stroke="#2e2e2e" stroke-width="1"/>
+  <circle cx="285" cy="123" r="4" fill="#C8FF00"/>
+  <text x="294" y="127" font-family="-apple-system, sans-serif" font-size="11" fill="#aaa">Instamart</text>
+  <text x="294" y="138" font-family="-apple-system, sans-serif" font-size="8" fill="#555">email</text>
+
+  <rect x="384" y="110" width="90" height="26" rx="13" fill="#1e1e1e" stroke="#2e2e2e" stroke-width="1"/>
+  <circle cx="401" cy="123" r="4" fill="#C8FF00"/>
+  <text x="410" y="127" font-family="-apple-system, sans-serif" font-size="11" fill="#aaa">Zepto</text>
+  <text x="410" y="138" font-family="-apple-system, sans-serif" font-size="8" fill="#555">email</text>
+
+  <rect x="482" y="110" width="80" height="26" rx="13" fill="#1e1e1e" stroke="#2e2e2e" stroke-width="1"/>
+  <circle cx="499" cy="123" r="4" fill="#C8FF00"/>
+  <text x="508" y="127" font-family="-apple-system, sans-serif" font-size="11" fill="#aaa">Tira</text>
+  <text x="508" y="138" font-family="-apple-system, sans-serif" font-size="8" fill="#555">API</text>
+
+  <!-- SECTION LABEL -->
+  <text x="36" y="164" font-family="-apple-system, sans-serif" font-size="10" fill="#444" letter-spacing="1">APPLICATION LAYERS</text>
+
+  <!-- ========== LAYER 1: FRONTEND ========== -->
+  <rect x="36" y="172" width="596" height="76" rx="10" fill="#1E2A1A"/>
+  <!-- label -->
+  <circle cx="58" cy="191" r="5" fill="#C8FF00"/>
+  <text x="70" y="195" font-family="-apple-system, sans-serif" font-size="10" font-weight="700" fill="#C8FF00" letter-spacing="1">FRONTEND · BROWSER</text>
+  <!-- chips -->
+  <rect x="50" y="205" width="118" height="24" rx="6" fill="#2A3D22" stroke="#3a5430" stroke-width="1"/>
+  <text x="109" y="221" font-family="'SF Mono', monospace" font-size="10" fill="#C8FF00" text-anchor="middle">app/(dashboard)</text>
+  <rect x="176" y="205" width="90" height="24" rx="6" fill="#2A3D22" stroke="#3a5430" stroke-width="1"/>
+  <text x="221" y="221" font-family="'SF Mono', monospace" font-size="10" fill="#C8FF00" text-anchor="middle">components/</text>
+  <rect x="274" y="205" width="130" height="24" rx="6" fill="#2A3D22" stroke="#3a5430" stroke-width="1"/>
+  <text x="339" y="221" font-family="-apple-system, sans-serif" font-size="10" fill="#C8FF00" text-anchor="middle">Server Components</text>
+  <rect x="412" y="205" width="130" height="24" rx="6" fill="#2A3D22" stroke="#3a5430" stroke-width="1"/>
+  <text x="477" y="221" font-family="-apple-system, sans-serif" font-size="10" fill="#C8FF00" text-anchor="middle">Client Components</text>
+  <rect x="550" y="205" width="70" height="24" rx="6" fill="#2A3D22" stroke="#3a5430" stroke-width="1"/>
+  <text x="585" y="221" font-family="-apple-system, sans-serif" font-size="10" fill="#C8FF00" text-anchor="middle">Clerk Auth</text>
+
+  <!-- Arrow 1 -->
+  <line x1="334" y1="248" x2="334" y2="265" stroke="#333" stroke-width="2"/>
+  <polygon points="329,263 334,272 339,263" fill="#444"/>
+  <text x="345" y="263" font-family="-apple-system, sans-serif" font-size="9" fill="#444">RSC direct import · fetch()</text>
+
+  <!-- ========== LAYER 2: API ========== -->
+  <rect x="36" y="274" width="596" height="80" rx="10" fill="#1A1E2A"/>
+  <circle cx="58" cy="293" r="5" fill="#7EB8FF"/>
+  <text x="70" y="297" font-family="-apple-system, sans-serif" font-size="10" font-weight="700" fill="#7EB8FF" letter-spacing="1">API LAYER · app/api/*</text>
+  <!-- chips row 1 -->
+  <rect x="50" y="307" width="50" height="22" rx="5" fill="#222A3D" stroke="#2e3f60" stroke-width="1"/>
+  <text x="75" y="322" font-family="'SF Mono', monospace" font-size="9" fill="#7EB8FF" text-anchor="middle">/pos</text>
+  <rect x="108" y="307" width="84" height="22" rx="5" fill="#222A3D" stroke="#2e3f60" stroke-width="1"/>
+  <text x="150" y="322" font-family="'SF Mono', monospace" font-size="9" fill="#7EB8FF" text-anchor="middle">/allocations</text>
+  <rect x="200" y="307" width="50" height="22" rx="5" fill="#222A3D" stroke="#2e3f60" stroke-width="1"/>
+  <text x="225" y="322" font-family="'SF Mono', monospace" font-size="9" fill="#7EB8FF" text-anchor="middle">/grn</text>
+  <rect x="258" y="307" width="80" height="22" rx="5" fill="#222A3D" stroke="#2e3f60" stroke-width="1"/>
+  <text x="298" y="322" font-family="'SF Mono', monospace" font-size="9" fill="#7EB8FF" text-anchor="middle">/inventory</text>
+  <rect x="346" y="307" width="78" height="22" rx="5" fill="#222A3D" stroke="#2e3f60" stroke-width="1"/>
+  <text x="385" y="322" font-family="'SF Mono', monospace" font-size="9" fill="#7EB8FF" text-anchor="middle">/analytics</text>
+  <rect x="432" y="307" width="76" height="22" rx="5" fill="#222A3D" stroke="#2e3f60" stroke-width="1"/>
+  <text x="470" y="322" font-family="-apple-system, sans-serif" font-size="9" fill="#7EB8FF" text-anchor="middle">Zod validate</text>
+  <rect x="516" y="307" width="76" height="22" rx="5" fill="#222A3D" stroke="#2e3f60" stroke-width="1"/>
+  <text x="554" y="322" font-family="-apple-system, sans-serif" font-size="9" fill="#7EB8FF" text-anchor="middle">Auth guard</text>
+  <!-- chips row 2 -->
+  <rect x="50" y="333" width="70" height="18" rx="4" fill="#222A3D" stroke="#2e3f60" stroke-width="1"/>
+  <text x="85" y="346" font-family="'SF Mono', monospace" font-size="8" fill="#7EB8FF" text-anchor="middle">/blinkit</text>
+  <rect x="128" y="333" width="80" height="18" rx="4" fill="#222A3D" stroke="#2e3f60" stroke-width="1"/>
+  <text x="168" y="346" font-family="'SF Mono', monospace" font-size="8" fill="#7EB8FF" text-anchor="middle">/instamart</text>
+  <rect x="216" y="333" width="56" height="18" rx="4" fill="#222A3D" stroke="#2e3f60" stroke-width="1"/>
+  <text x="244" y="346" font-family="'SF Mono', monospace" font-size="8" fill="#7EB8FF" text-anchor="middle">/tira</text>
+  <rect x="280" y="333" width="70" height="18" rx="4" fill="#222A3D" stroke="#2e3f60" stroke-width="1"/>
+  <text x="315" y="346" font-family="'SF Mono', monospace" font-size="8" fill="#7EB8FF" text-anchor="middle">/settings</text>
+
+  <!-- Arrow 2 -->
+  <line x1="334" y1="354" x2="334" y2="371" stroke="#333" stroke-width="2"/>
+  <polygon points="329,369 334,378 339,369" fill="#444"/>
+  <text x="345" y="369" font-family="-apple-system, sans-serif" font-size="9" fill="#444">service calls</text>
+
+  <!-- ========== LAYER 3: SERVICES ========== -->
+  <rect x="36" y="380" width="596" height="80" rx="10" fill="#221A2A"/>
+  <circle cx="58" cy="399" r="5" fill="#C97BFF"/>
+  <text x="70" y="403" font-family="-apple-system, sans-serif" font-size="10" font-weight="700" fill="#C97BFF" letter-spacing="1">SERVICES · lib/services/</text>
+  <!-- chips -->
+  <rect x="50" y="413" width="104" height="22" rx="5" fill="#2E2237" stroke="#47336e" stroke-width="1"/>
+  <text x="102" y="428" font-family="-apple-system, sans-serif" font-size="9" fill="#C97BFF" text-anchor="middle">email-processor</text>
+  <rect x="162" y="413" width="70" height="22" rx="5" fill="#2E2237" stroke="#47336e" stroke-width="1"/>
+  <text x="197" y="428" font-family="-apple-system, sans-serif" font-size="9" fill="#C97BFF" text-anchor="middle">reconcile</text>
+  <rect x="240" y="413" width="116" height="22" rx="5" fill="#2E2237" stroke="#47336e" stroke-width="1"/>
+  <text x="298" y="428" font-family="-apple-system, sans-serif" font-size="9" fill="#C97BFF" text-anchor="middle">allocate-and-email</text>
+  <rect x="364" y="413" width="70" height="22" rx="5" fill="#2E2237" stroke="#47336e" stroke-width="1"/>
+  <text x="399" y="428" font-family="-apple-system, sans-serif" font-size="9" fill="#C97BFF" text-anchor="middle">analytics</text>
+  <rect x="442" y="413" width="50" height="22" rx="5" fill="#2E2237" stroke="#47336e" stroke-width="1"/>
+  <text x="467" y="428" font-family="-apple-system, sans-serif" font-size="9" fill="#C97BFF" text-anchor="middle">audit</text>
+  <rect x="500" y="413" width="90" height="22" rx="5" fill="#2E2237" stroke="#47336e" stroke-width="1"/>
+  <text x="545" y="428" font-family="-apple-system, sans-serif" font-size="9" fill="#C97BFF" text-anchor="middle">po-documents</text>
+
+  <rect x="50" y="439" width="84" height="18" rx="4" fill="#2E2237" stroke="#47336e" stroke-width="1"/>
+  <text x="92" y="452" font-family="-apple-system, sans-serif" font-size="8" fill="#C97BFF" text-anchor="middle">nykaa-sync</text>
+  <rect x="142" y="439" width="80" height="18" rx="4" fill="#2E2237" stroke="#47336e" stroke-width="1"/>
+  <text x="182" y="452" font-family="-apple-system, sans-serif" font-size="8" fill="#C97BFF" text-anchor="middle">blinkit-sync</text>
+  <rect x="230" y="439" width="76" height="18" rx="4" fill="#2E2237" stroke="#47336e" stroke-width="1"/>
+  <text x="268" y="452" font-family="-apple-system, sans-serif" font-size="8" fill="#C97BFF" text-anchor="middle">zepto-sync</text>
+  <rect x="314" y="439" width="68" height="18" rx="4" fill="#2E2237" stroke="#47336e" stroke-width="1"/>
+  <text x="348" y="452" font-family="-apple-system, sans-serif" font-size="8" fill="#C97BFF" text-anchor="middle">tira-sync</text>
+  <rect x="390" y="439" width="80" height="18" rx="4" fill="#2E2237" stroke="#47336e" stroke-width="1"/>
+  <text x="430" y="452" font-family="-apple-system, sans-serif" font-size="8" fill="#C97BFF" text-anchor="middle">sku-resolver</text>
+  <rect x="478" y="439" width="74" height="18" rx="4" fill="#2E2237" stroke="#47336e" stroke-width="1"/>
+  <text x="515" y="452" font-family="-apple-system, sans-serif" font-size="8" fill="#C97BFF" text-anchor="middle">fill-rate</text>
+  <rect x="560" y="439" width="68" height="18" rx="4" fill="#2E2237" stroke="#47336e" stroke-width="1"/>
+  <text x="594" y="452" font-family="-apple-system, sans-serif" font-size="8" fill="#C97BFF" text-anchor="middle">wms-sync</text>
+
+  <!-- Arrow 3 -->
+  <line x1="334" y1="460" x2="334" y2="477" stroke="#333" stroke-width="2"/>
+  <polygon points="329,475 334,484 339,475" fill="#444"/>
+  <text x="345" y="475" font-family="-apple-system, sans-serif" font-size="9" fill="#444">client calls</text>
+
+  <!-- ========== LAYER 4: INTEGRATIONS ========== -->
+  <rect x="36" y="486" width="596" height="80" rx="10" fill="#2A1E1A"/>
+  <circle cx="58" cy="505" r="5" fill="#FF9B5E"/>
+  <text x="70" y="509" font-family="-apple-system, sans-serif" font-size="10" font-weight="700" fill="#FF9B5E" letter-spacing="1">INTEGRATIONS · lib/integrations/</text>
+  <!-- chips -->
+  <rect x="50" y="519" width="72" height="22" rx="5" fill="#3D2A20" stroke="#6b4030" stroke-width="1"/>
+  <text x="86" y="534" font-family="-apple-system, sans-serif" font-size="9" fill="#FF9B5E" text-anchor="middle">Claude AI</text>
+  <rect x="130" y="519" width="72" height="22" rx="5" fill="#3D2A20" stroke="#6b4030" stroke-width="1"/>
+  <text x="166" y="534" font-family="-apple-system, sans-serif" font-size="9" fill="#FF9B5E" text-anchor="middle">Gmail API</text>
+  <rect x="210" y="519" width="100" height="22" rx="5" fill="#3D2A20" stroke="#6b4030" stroke-width="1"/>
+  <text x="260" y="534" font-family="-apple-system, sans-serif" font-size="9" fill="#FF9B5E" text-anchor="middle">Google Sheets</text>
+  <rect x="318" y="519" width="58" height="22" rx="5" fill="#3D2A20" stroke="#6b4030" stroke-width="1"/>
+  <text x="347" y="534" font-family="-apple-system, sans-serif" font-size="9" fill="#FF9B5E" text-anchor="middle">Resend</text>
+  <rect x="384" y="519" width="72" height="22" rx="5" fill="#3D2A20" stroke="#6b4030" stroke-width="1"/>
+  <text x="420" y="534" font-family="-apple-system, sans-serif" font-size="9" fill="#FF9B5E" text-anchor="middle">Twilio WA</text>
+  <rect x="464" y="519" width="54" height="22" rx="5" fill="#3D2A20" stroke="#6b4030" stroke-width="1"/>
+  <text x="491" y="534" font-family="-apple-system, sans-serif" font-size="9" fill="#FF9B5E" text-anchor="middle">AWS S3</text>
+  <rect x="526" y="519" width="54" height="22" rx="5" fill="#3D2A20" stroke="#6b4030" stroke-width="1"/>
+  <text x="553" y="534" font-family="-apple-system, sans-serif" font-size="9" fill="#FF9B5E" text-anchor="middle">PDFKit</text>
+
+  <rect x="50" y="545" width="72" height="18" rx="4" fill="#3D2A20" stroke="#6b4030" stroke-width="1"/>
+  <text x="86" y="558" font-family="-apple-system, sans-serif" font-size="8" fill="#FF9B5E" text-anchor="middle">Playwright</text>
+  <rect x="130" y="545" width="68" height="18" rx="4" fill="#3D2A20" stroke="#6b4030" stroke-width="1"/>
+  <text x="164" y="558" font-family="-apple-system, sans-serif" font-size="8" fill="#FF9B5E" text-anchor="middle">WMS REST</text>
+  <rect x="206" y="545" width="84" height="18" rx="4" fill="#3D2A20" stroke="#6b4030" stroke-width="1"/>
+  <text x="248" y="558" font-family="-apple-system, sans-serif" font-size="8" fill="#FF9B5E" text-anchor="middle">Blinkit API</text>
+  <rect x="298" y="545" width="90" height="18" rx="4" fill="#3D2A20" stroke="#6b4030" stroke-width="1"/>
+  <text x="343" y="558" font-family="-apple-system, sans-serif" font-size="8" fill="#FF9B5E" text-anchor="middle">Nykaa Portal</text>
+  <rect x="396" y="545" width="74" height="18" rx="4" fill="#3D2A20" stroke="#6b4030" stroke-width="1"/>
+  <text x="433" y="558" font-family="-apple-system, sans-serif" font-size="8" fill="#FF9B5E" text-anchor="middle">Zepto API</text>
+
+  <!-- Arrow 4 -->
+  <line x1="334" y1="566" x2="334" y2="583" stroke="#333" stroke-width="2"/>
+  <polygon points="329,581 334,590 339,581" fill="#444"/>
+  <text x="345" y="581" font-family="-apple-system, sans-serif" font-size="9" fill="#444">Prisma ORM · REST</text>
+
+  <!-- ========== LAYER 5: DATA ========== -->
+  <rect x="36" y="592" width="596" height="60" rx="10" fill="#1A2226"/>
+  <circle cx="58" cy="610" r="5" fill="#5ECFFF"/>
+  <text x="70" y="614" font-family="-apple-system, sans-serif" font-size="10" font-weight="700" fill="#5ECFFF" letter-spacing="1">DATA · PERSISTENCE</text>
+  <rect x="50" y="624" width="138" height="22" rx="5" fill="#1E2E36" stroke="#2a4a5a" stroke-width="1"/>
+  <text x="119" y="639" font-family="-apple-system, sans-serif" font-size="9" fill="#5ECFFF" text-anchor="middle">PostgreSQL (Prisma)</text>
+  <rect x="196" y="624" width="130" height="22" rx="5" fill="#1E2E36" stroke="#2a4a5a" stroke-width="1"/>
+  <text x="261" y="639" font-family="-apple-system, sans-serif" font-size="9" fill="#5ECFFF" text-anchor="middle">Google Sheets (ATP)</text>
+  <rect x="334" y="624" width="104" height="22" rx="5" fill="#1E2E36" stroke="#2a4a5a" stroke-width="1"/>
+  <text x="386" y="639" font-family="-apple-system, sans-serif" font-size="9" fill="#5ECFFF" text-anchor="middle">AWS S3 (PDFs)</text>
+  <rect x="446" y="624" width="104" height="22" rx="5" fill="#1E2E36" stroke="#2a4a5a" stroke-width="1"/>
+  <text x="498" y="639" font-family="-apple-system, sans-serif" font-size="9" fill="#5ECFFF" text-anchor="middle">Gmail (inbox)</text>
+
+  <!-- ========== CRON SIDEBAR ========== -->
+  <rect x="648" y="172" width="216" height="480" rx="10" fill="#1A1A1A" stroke="#2a2a2a" stroke-width="1"/>
+
+  <!-- Cron title -->
+  <circle cx="666" cy="192" r="4" fill="#F5C542"/>
+  <text x="676" y="196" font-family="-apple-system, sans-serif" font-size="10" font-weight="700" fill="#F5C542" letter-spacing="1">CRON JOBS</text>
+
+  <!-- Cron 1 -->
+  <line x1="648" y1="208" x2="864" y2="208" stroke="#222" stroke-width="1"/>
+  <text x="660" y="224" font-family="'SF Mono', monospace" font-size="8.5" fill="#F5C542">/api/cron/poll-emails</text>
+  <text x="660" y="238" font-family="-apple-system, sans-serif" font-size="8" fill="#666">⏱ every 10 min</text>
+  <text x="660" y="252" font-family="-apple-system, sans-serif" font-size="8" fill="#888">Gmail → Claude parse →</text>
+  <text x="660" y="264" font-family="-apple-system, sans-serif" font-size="8" fill="#888">PO / GRN / dispatch</text>
+
+  <!-- Cron 2 -->
+  <line x1="648" y1="276" x2="864" y2="276" stroke="#222" stroke-width="1"/>
+  <text x="660" y="292" font-family="'SF Mono', monospace" font-size="8.5" fill="#F5C542">/api/cron/check-timers</text>
+  <text x="660" y="306" font-family="-apple-system, sans-serif" font-size="8" fill="#666">⏱ hourly</text>
+  <text x="660" y="320" font-family="-apple-system, sans-serif" font-size="8" fill="#888">GRN reminders ·</text>
+  <text x="660" y="332" font-family="-apple-system, sans-serif" font-size="8" fill="#888">escalation · 7 AM digest</text>
+
+  <!-- Cron 3 -->
+  <line x1="648" y1="344" x2="864" y2="344" stroke="#222" stroke-width="1"/>
+  <text x="660" y="360" font-family="'SF Mono', monospace" font-size="8.5" fill="#F5C542">/api/cron/scrape-portals</text>
+  <text x="660" y="374" font-family="-apple-system, sans-serif" font-size="8" fill="#666">⏱ 9 AM &amp; 5 PM</text>
+  <text x="660" y="388" font-family="-apple-system, sans-serif" font-size="8" fill="#888">Playwright → Nykaa &amp;</text>
+  <text x="660" y="400" font-family="-apple-system, sans-serif" font-size="8" fill="#888">Blinkit portals for GRNs</text>
+
+  <!-- Sub-system -->
+  <line x1="648" y1="412" x2="864" y2="412" stroke="#222" stroke-width="1"/>
+  <circle cx="666" cy="428" r="4" fill="#5ECFFF"/>
+  <text x="676" y="432" font-family="-apple-system, sans-serif" font-size="10" font-weight="700" fill="#5ECFFF" letter-spacing="0.5">SUB-SYSTEM</text>
+  <text x="660" y="448" font-family="'SF Mono', monospace" font-size="8.5" fill="#5ECFFF">nykaa-simulate/</text>
+  <text x="660" y="462" font-family="-apple-system, sans-serif" font-size="8" fill="#888">GitHub Actions cron</text>
+  <text x="660" y="474" font-family="-apple-system, sans-serif" font-size="8" fill="#888">Playwright + camoufox</text>
+  <text x="660" y="486" font-family="-apple-system, sans-serif" font-size="8" fill="#888">OTP via Gmail API</text>
+  <text x="660" y="498" font-family="-apple-system, sans-serif" font-size="8" fill="#888">CSV report download</text>
+
+  <!-- Boundaries -->
+  <line x1="648" y1="510" x2="864" y2="510" stroke="#222" stroke-width="1"/>
+  <circle cx="666" cy="526" r="4" fill="#888"/>
+  <text x="676" y="530" font-family="-apple-system, sans-serif" font-size="10" font-weight="700" fill="#aaa" letter-spacing="0.5">BOUNDARIES</text>
+  <text x="660" y="548" font-family="-apple-system, sans-serif" font-size="8" fill="#888">
+    <tspan fill="#C8FF00">server-only</tspan> on all lib/
+  </text>
+  <text x="660" y="562" font-family="-apple-system, sans-serif" font-size="8" fill="#888">Zod env validation at boot</text>
+  <text x="660" y="576" font-family="-apple-system, sans-serif" font-size="8" fill="#888">CRON_SECRET on cron routes</text>
+  <text x="660" y="590" font-family="-apple-system, sans-serif" font-size="8" fill="#888">Clerk auth on API routes</text>
+  <text x="660" y="604" font-family="-apple-system, sans-serif" font-size="8" fill="#888">Idempotent ingestion</text>
+  <text x="660" y="618" font-family="-apple-system, sans-serif" font-size="8" fill="#888">Graceful degradation</text>
+  <text x="660" y="632" font-family="-apple-system, sans-serif" font-size="8" fill="#888">Append-only audit log</text>
+
+  <!-- Cron arrows connecting to API layer -->
+  <line x1="648" y1="314" x2="632" y2="314" stroke="#F5C542" stroke-width="1" stroke-dasharray="4,3"/>
+  <polygon points="634,310 626,314 634,318" fill="#F5C542"/>
+
+  <!-- Footer -->
+  <text x="36" y="680" font-family="-apple-system, sans-serif" font-size="9" fill="#333">Moxie Beauty · Internal · Confidential</text>
+  <text x="820" y="680" font-family="-apple-system, sans-serif" font-size="9" fill="#333" text-anchor="end">moxie-ops v1.0</text>
+</svg>

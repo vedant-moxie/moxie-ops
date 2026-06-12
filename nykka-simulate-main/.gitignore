@@ -1,0 +1,22 @@
+# Node.js
+node_modules/
+.env
+
+# Gmail API credentials (SENSITIVE!)
+gmail-credentials.json
+gmail-token.json
+nykaa-access-token.json
+gcp-service-account.json
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Build artifacts
+dist/
+build/
+
+# Editor/OS specific
+.DS_Store
+.vscode/
