@@ -1,6 +1,10 @@
 import "server-only";
+import { readFile } from "node:fs/promises";
+import { unzipSync } from "fflate";
 import { getDocumentProxy, extractText } from "unpdf";
 import type { PurchaseOrder } from "@prisma/client";
+import { prisma } from "@/lib/db";
+import { tiraPdfPath } from "@/lib/integrations/tira/doc-cache";
 import { BlinkitClient, BlinkitAuthExpired } from "@/lib/integrations/blinkit/client";
 import {
   getTokensIfCached as getBlinkitTokensIfCached,
@@ -19,6 +23,12 @@ import {
   getTokens as getInstamartTokens,
   type InstamartTokens,
 } from "@/lib/integrations/instamart/auth";
+import { NykaaClient, NykaaAuthExpired } from "@/lib/integrations/nykaa/client";
+import {
+  getTokensIfCached as getNykaaTokensIfCached,
+  getTokens as getNykaaTokens,
+  type NykaaTokens,
+} from "@/lib/integrations/nykaa/auth";
 import { refreshTokenOnce, looksLikeAuthError } from "@/lib/services/token-refresh";
 import {
   GSTIN_DISPATCH_TABLE,
@@ -45,6 +55,38 @@ export async function extractGstinFromPdf(pdfBuffer: Buffer): Promise<string[]> 
   const pdf = await getDocumentProxy(new Uint8Array(pdfBuffer));
   const { text } = await extractText(pdf, { mergePages: true });
   return findGstinsInText(text);
+}
+
+function looksLikePdf(buf: Buffer): boolean {
+  return buf.length > 4 && buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46; // %PDF
+}
+function looksLikeZip(buf: Buffer): boolean {
+  return buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4b; // PK
+}
+
+/** Pull the first PDF entry out of a ZIP buffer (Nykaa's doc is a zip of PDF+CSV). */
+function extractPdfFromZip(zip: Buffer): Buffer | null {
+  try {
+    const files = unzipSync(new Uint8Array(zip));
+    for (const [name, bytes] of Object.entries(files)) {
+      if (name.toLowerCase().endsWith(".pdf")) return Buffer.from(bytes);
+    }
+  } catch { /* not a readable zip */ }
+  return null;
+}
+
+/**
+ * GSTINs from a PO document that may be a PDF *or* a ZIP-of-PDF (Nykaa). Unzips
+ * when needed and reads the GSTINs off the inner PDF — used to resolve the
+ * supplier (Moxie) GSTIN → dispatch-from warehouse.
+ */
+export async function extractGstinsFromDoc(content: Buffer, filename: string): Promise<string[]> {
+  const lower = (filename || "").toLowerCase();
+  let pdfBytes: Buffer | null = null;
+  if (lower.endsWith(".zip") || looksLikeZip(content)) pdfBytes = extractPdfFromZip(content);
+  else if (lower.endsWith(".pdf") || looksLikePdf(content)) pdfBytes = content;
+  if (!pdfBytes) return [];
+  return extractGstinFromPdf(pdfBytes);
 }
 
 // ── PO document bundle ──────────────────────────────────────────────────────
@@ -78,6 +120,12 @@ export async function getPoDocuments(
   }
   if (source === "INSTAMART") {
     return getInstamartPoDocuments(po);
+  }
+  if (source === "NYKAA") {
+    return getNykaaPoDocuments(po);
+  }
+  if (source === "TIRA") {
+    return getTiraPoDocuments(po);
   }
   // Default: Blinkit / EMAIL / PORTAL / MANUAL — all use the partnersbiz client.
   return getBlinkitPoDocuments(po);
@@ -292,6 +340,106 @@ async function getInstamartPoDocuments(
   });
 }
 
+// ── Nykaa ────────────────────────────────────────────────────────────────────
+
+/** Build a simple picking-list CSV from the Nykaa PO's raw items. */
+function buildNykaaCsv(po: Pick<PurchaseOrder, "channelPoNumber" | "rawData">): { content: Buffer; filename: string } | null {
+  const raw = po.rawData as Record<string, unknown> | null;
+  const items = raw && Array.isArray(raw.items) ? (raw.items as Record<string, unknown>[]) : [];
+  if (items.length === 0) return null;
+  const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const header = ["SKU Code", "Product", "Ordered Qty", "Unit Price", "EAN"];
+  const rows = items.map((it) =>
+    [
+      it.skuCode ?? it.sku_code ?? it.code ?? "",
+      it.skuName ?? it.name ?? it.productName ?? "",
+      it.poQty ?? it.qty ?? it.quantity ?? it.orderQty ?? "",
+      it.unitPrice ?? it.price ?? "",
+      it.eanNo ?? it.ean ?? "",
+    ].map(esc).join(","),
+  );
+  const csv = [header.map(esc).join(","), ...rows].join("\r\n");
+  return { content: Buffer.from(csv, "utf8"), filename: `${po.channelPoNumber ?? "nykaa-po"}.csv` };
+}
+
+async function getNykaaPoDocuments(
+  po: Pick<PurchaseOrder, "channelPoNumber" | "rawData">,
+): Promise<PoDocumentResult> {
+  const poId = po.channelPoNumber?.trim() || null;
+  if (!poId) {
+    return { pdf: null, excel: null, warnings: ["Cannot derive Nykaa PO id — channelPoNumber is empty"] };
+  }
+  // CSV is generated from our own data, so it's always available even if the
+  // ZIP download fails (auth/expired).
+  const excel = buildNykaaCsv(po);
+
+  const result = await getDocsWithRefresh<NykaaTokens>({
+    channel: "nykaa",
+    noTokenWarnings: [
+      `No cached Nykaa token — PO ZIP skipped for ${poId} (re-authenticate via OTP first).`,
+    ],
+    getCached: getNykaaTokensIfCached,
+    refresh: () => getNykaaTokens(true),
+    attempt: (tokens) => {
+      const client = new NykaaClient(tokens);
+      // The Nykaa "PO document" is a ZIP (PO PDF + details) from the seller portal.
+      return runDownloads(
+        poId,
+        "Nykaa",
+        () => client.downloadPoZip(poId),
+        async () => null, // Excel is generated locally (below), not downloaded.
+        NykaaAuthExpired,
+      );
+    },
+  });
+
+  // Prefer the locally-generated CSV over the (null) downloaded excel.
+  return { pdf: result.pdf, excel: result.excel ?? excel, warnings: result.warnings };
+}
+
+// ── Tira (Reliance SRM) ──────────────────────────────────────────────────────
+
+/** Build a picking-list CSV from the Tira PO's stored line items. */
+async function buildTiraCsv(poId: string): Promise<{ content: Buffer; filename: string } | null> {
+  const po = await prisma.purchaseOrder.findFirst({
+    where: { channelPoNumber: poId, source: "TIRA" },
+    select: { lineItems: { select: { channelSkuCode: true, requestedQty: true, unitPrice: true, sku: { select: { internalCode: true, name: true } } } } },
+  });
+  if (!po || po.lineItems.length === 0) return null;
+  const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const header = ["SKU Code", "Tira Code", "Product", "Ordered Qty", "Unit Price"];
+  const rows = po.lineItems.map((l) =>
+    [l.sku.internalCode, l.channelSkuCode ?? "", l.sku.name, l.requestedQty, l.unitPrice ?? ""].map(esc).join(","),
+  );
+  const csv = [header.map(esc).join(","), ...rows].join("\r\n");
+  return { content: Buffer.from(csv, "utf8"), filename: `${poId}.csv` };
+}
+
+/**
+ * Tira PO documents. The PDF can only be fetched inside the live browser session
+ * (F5/SAP binding), so the scrape pre-downloads it to a disk cache — here we just
+ * read it. The Excel is a picking-list CSV generated from our stored line items.
+ * If the PDF isn't cached yet, a "Sync from Tira" will fetch it.
+ */
+async function getTiraPoDocuments(
+  po: Pick<PurchaseOrder, "channelPoNumber" | "rawData">,
+): Promise<PoDocumentResult> {
+  const poId = po.channelPoNumber?.trim() || null;
+  if (!poId) return { pdf: null, excel: null, warnings: ["Cannot derive Tira PO id — channelPoNumber is empty"] };
+
+  const warnings: string[] = [];
+  let pdf: { content: Buffer; filename: string } | null = null;
+  try {
+    const content = await readFile(tiraPdfPath(poId));
+    pdf = { content, filename: `${poId}.pdf` };
+  } catch {
+    warnings.push(`Tira PDF not cached for PO ${poId} — run "Sync from Tira" to fetch it (it's downloaded inside the browser session).`);
+  }
+
+  const excel = await buildTiraCsv(poId).catch(() => null);
+  return { pdf, excel, warnings };
+}
+
 // ── Convenience: full pipeline for a single PO ─────────────────────────────
 
 export interface ResolvedDispatch {
@@ -328,12 +476,14 @@ export async function resolveDispatchFromForPo(
   }
 
   let pdfContent: Buffer;
+  let pdfFilename = "";
   try {
     const { pdf } = await getPoDocuments(po);
     if (!pdf) {
       return { dispatchFrom: null, gstin: null, warnings: [`PDF unavailable for PO ${poId}`] };
     }
     pdfContent = pdf.content;
+    pdfFilename = pdf.filename;
   } catch (err) {
     return {
       dispatchFrom: null,
@@ -344,7 +494,8 @@ export async function resolveDispatchFromForPo(
 
   let gstins: string[];
   try {
-    gstins = await extractGstinFromPdf(pdfContent);
+    // Handles a PDF or a ZIP-of-PDF (Nykaa) — unzips and reads the inner PDF.
+    gstins = await extractGstinsFromDoc(pdfContent, pdfFilename);
   } catch (err) {
     return {
       dispatchFrom: null,

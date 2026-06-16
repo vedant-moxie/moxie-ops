@@ -1,6 +1,7 @@
 import "server-only";
 import { Resend } from "resend";
 import { env } from "@/lib/env";
+import { getEmailRedirect } from "@/lib/services/app-settings";
 
 let resend: Resend | null = null;
 function getResend(): Resend | null {
@@ -25,11 +26,25 @@ export async function sendEmail(params: SendEmailParams): Promise<string | null>
     console.log(`[resend] (skipped, not configured) → "${params.subject}" to`, params.to);
     return null;
   }
+
+  // Test-mode sink: redirect everything to the test address; nobody else mailed.
+  const redirect = await getEmailRedirect();
+  let to = params.to;
+  let subject = params.subject;
+  let html = params.html ?? params.text ?? "";
+  if (redirect) {
+    const original = Array.isArray(params.to) ? params.to.join(", ") : params.to;
+    console.log(`[resend] TEST MODE → redirecting "${params.subject}" (was → ${original}) to ${redirect}`);
+    to = redirect;
+    subject = `[TEST] ${params.subject}`;
+    html = `<div style="background:#fff7d6;border:1px solid #e6cf6a;border-radius:8px;padding:10px 12px;margin-bottom:16px;font-family:Arial,sans-serif;font-size:13px;color:#665200">🧪 <b>Test mode</b> — this email would normally go to: <b>${original}</b></div>${html}`;
+  }
+
   const { data, error } = await client.emails.send({
     from: env.RESEND_FROM_EMAIL,
-    to: params.to,
-    subject: params.subject,
-    html: params.html ?? params.text ?? "",
+    to,
+    subject,
+    html,
     text: params.text,
     replyTo: params.replyTo,
     attachments: params.attachments?.map((a) => ({

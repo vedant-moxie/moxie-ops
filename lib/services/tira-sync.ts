@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import { getTokens } from "@/lib/integrations/tira/auth";
-import { TiraClient, TiraAuthExpired, type RawTiraPo, type RawTiraItem } from "@/lib/integrations/tira/client";
+import { type RawTiraPo, type RawTiraItem } from "@/lib/integrations/tira/client";
+import { collectTiraViaBrowser } from "@/lib/integrations/tira/browser";
 
 const IST_OFFSET_MS = 5.5 * 3_600_000;
 
@@ -182,6 +182,13 @@ async function ingestTiraPOs(
       warnings.push(`PO ${poNum}: no line items in response — created summary placeholder`);
     }
 
+    // Tira PO headers carry no value field (only line items do), so derive the
+    // PO total from the lines (rate × qty) — matches the per-line VALUE the UI
+    // shows. Fall back to a header value if one ever appears.
+    const headerValue = num(raw.totalValue ?? raw.netValue ?? raw.grossValue ?? raw.amount);
+    const linesValue = resolvedLines.reduce((s, l) => s + (l.unitPrice ?? 0) * l.requestedQty, 0);
+    const totalRequestedValue = headerValue ?? (linesValue > 0 ? linesValue : null);
+
     try {
       const existing = await prisma.purchaseOrder.findUnique({ where: { externalId } });
       if (existing) {
@@ -194,7 +201,7 @@ async function ingestTiraPOs(
           data: {
             poDate: parseDate(raw.purchaseOrderDate ?? raw.poDate ?? raw.po_date ?? raw.documentDate),
             requestedDeliveryDate: deliveryDate,
-            totalRequestedValue: num(raw.totalValue ?? raw.netValue ?? raw.grossValue ?? raw.amount),
+            totalRequestedValue,
             ...(safeToReplace
               ? {
                   lineItems: {
@@ -222,7 +229,7 @@ async function ingestTiraPOs(
             status: "PENDING_REVIEW",
             poDate: parseDate(raw.purchaseOrderDate ?? raw.poDate ?? raw.po_date ?? raw.documentDate),
             requestedDeliveryDate: deliveryDate,
-            totalRequestedValue: num(raw.totalValue ?? raw.netValue ?? raw.grossValue ?? raw.amount),
+            totalRequestedValue,
             rawData: raw as never,
             lineItems: {
               create: resolvedLines.map((l) => ({
@@ -309,78 +316,27 @@ export async function ingestTiraPayload(payload: {
 }
 
 /**
- * Live-sync Tira POs from srm-rrscm.ril.com.
- * Re-authenticates once if the cached JWT has expired.
+ * Live-sync Tira POs from srm-rrscm.ril.com by driving a real headless browser.
+ *
+ * The portal's F5/SAP SSO rejects raw server-to-server requests ("Unauthorized
+ * session"), so we log in with a real Chromium (sap-user/sap-password), let the
+ * SPA cache the PO list, and collect it in-page — no console paste required.
+ * The collected `{ pos, items }` payload goes through the same ingest path as
+ * the manual browser collector.
  */
 export async function syncTira(opts: {
   since?: string;
   until?: string;
   actorLabel?: string;
 } = {}): Promise<TiraSyncResult> {
+  // The portal's IndexedDB PO list isn't date-filtered server-side; date args
+  // are accepted for API symmetry but the browser returns the full cached list.
   const since = opts.since ?? istDaysAgo(30);
   const until = opts.until ?? istDaysAgo(-1);
 
-  const channel = await prisma.channel.findFirst({
-    where: { name: { contains: "Tira", mode: "insensitive" } },
-  });
-  if (!channel) {
-    throw new Error(
-      "Tira channel not found. Create it via Settings → Channels or run the seed script.",
-    );
-  }
+  const payload = await collectTiraViaBrowser();
+  console.info(`[tira-sync] browser collected ${payload.pos.length} POs, ${Object.keys(payload.items).length} with items`);
 
-  const fetchAll = async (forceRefresh: boolean): Promise<{
-    rawPos: RawTiraPo[];
-    itemsMap: Map<string, RawTiraItem[]>;
-  }> => {
-    const tokens = await getTokens(forceRefresh);
-    const client = new TiraClient(tokens);
-    const rawPos = await client.listPurchaseOrders({ since, until });
-
-    // Fetch line items for each PO in parallel (max ~10 concurrent).
-    const itemsMap = new Map<string, RawTiraItem[]>();
-    const BATCH = 10;
-    for (let i = 0; i < rawPos.length; i += BATCH) {
-      const slice = rawPos.slice(i, i + BATCH);
-      await Promise.all(
-        slice.map(async (po) => {
-          const poNum = extractPoNumber(po);
-          if (!poNum) return;
-          try {
-            const items = await client.fetchPoItems(poNum);
-            if (items.length > 0) itemsMap.set(poNum, items);
-          } catch (err) {
-            // Non-fatal — will fall back to inline lineItems (if any)
-            console.warn(`[tira-sync] items fetch failed for PO ${poNum}: ${String(err)}`);
-          }
-        }),
-      );
-    }
-
-    return { rawPos, itemsMap };
-  };
-
-  let rawPos: RawTiraPo[];
-  let itemsMap: Map<string, RawTiraItem[]>;
-  try {
-    ({ rawPos, itemsMap } = await fetchAll(false));
-  } catch (err) {
-    if (err instanceof TiraAuthExpired) {
-      console.warn("[tira-sync] token expired — re-authenticating");
-      ({ rawPos, itemsMap } = await fetchAll(true));
-    } else {
-      throw err;
-    }
-  }
-
-  console.info(`[tira-sync] fetched ${rawPos.length} POs, ${itemsMap.size} with separate items (${since} → ${until})`);
-  const result = await ingestTiraPOs(rawPos, channel.id, itemsMap);
-  if (result.warnings.length) {
-    console.warn("[tira-sync] warnings:", result.warnings);
-  }
-  console.info(
-    `[tira-sync] done: +${result.created} created, ${result.updated} updated, ${result.skipped} skipped, ${result.skusCreated} new SKUs`,
-  );
-
-  return { since, until, fetched: rawPos.length, ...result };
+  const result = await ingestTiraPayload(payload);
+  return { ...result, since, until };
 }

@@ -30,6 +30,54 @@ export function resolveInternalSku(source: ChannelSource, channelCode: string): 
 }
 
 /**
+ * Resolve an EAN/barcode to the Moxie internal code, or null if unknown.
+ * EAN is the universal join — it works even when a channel's code column is
+ * wrong or missing (e.g. Zepto's `zeptoCode` holds the pvId UUID, not the
+ * skuCode that appears on PO lines).
+ */
+export function resolveInternalSkuByEan(ean: string | null | undefined): string | null {
+  if (!ean) return null;
+  return skuMasterMaps().eanToInternal[String(ean).trim()] ?? null;
+}
+
+/**
+ * Best internal code for a PO line: try the channel-code map first, then fall
+ * back to the line's EAN, then the raw channel code. Use this anywhere a SKU is
+ * shown to a human or sent to the warehouse/WMS.
+ */
+export function resolveLineInternalSku(input: {
+  source: ChannelSource;
+  channelCode: string | null | undefined;
+  ean?: string | null;
+  /** Authoritative EAN→internal map (from the DB). Consulted before the in-memory
+   *  map, which can be empty in the server-component layer. */
+  eanMap?: Map<string, string>;
+}): string {
+  const { source, channelCode, ean, eanMap } = input;
+  if (channelCode) {
+    const viaCode = resolveInternalSku(source, channelCode);
+    if (viaCode !== channelCode) return viaCode; // channel-code map had it
+  }
+  if (ean) {
+    const fromDb = eanMap?.get(ean.trim());
+    if (fromDb) return fromDb;
+  }
+  return resolveInternalSkuByEan(ean) ?? channelCode ?? "";
+}
+
+/** Pull an EAN/barcode out of a PO line's raw data (field name varies by channel). */
+export function eanFromRaw(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  for (const k of ["eanNo", "ean", "eanUPC", "ean_upc", "barcode", "eanUpc", "EAN"]) {
+    const v = r[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+    if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  }
+  return null;
+}
+
+/**
  * True when `channelCode` is a known SKU for this channel — i.e. present in the
  * channel→internal mapping (so it maps to a real Moxie SKU). `false` means the
  * channel ordered a SKU we haven't mapped yet (a new/unknown SKU) — surfaced as a

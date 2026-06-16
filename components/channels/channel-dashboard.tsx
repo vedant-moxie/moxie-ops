@@ -10,7 +10,7 @@ import {
 } from "recharts";
 import {
   Package, IndianRupee, Boxes, Store, RefreshCw, Upload, ChevronDown,
-  ChevronRight, FileSpreadsheet, Loader2, Mail, Download, ClipboardList,
+  ChevronRight, FileSpreadsheet, Loader2, Mail, Download, ClipboardList, CheckCircle2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,15 @@ import type { ChannelConfig } from "@/lib/channels";
 import type { ChannelInsights } from "@/lib/services/blinkit-analytics";
 
 const LIME = "#a3d83b";
+
+// Internal PO statuses at or beyond allocation — once a PO reaches these, the
+// list shows it as "Allocated" everywhere (not the channel's raw status).
+const ALLOCATED_OR_BEYOND = new Set([
+  "ALLOCATED", "APPROVED", "DISPATCHED", "DELIVERED", "GRN_RECEIVED", "CLOSED",
+]);
+function titleCaseStatus(s: string): string {
+  return s.charAt(0) + s.slice(1).toLowerCase().replace(/_/g, " ");
+}
 const MINT = "#7fd9b8";
 const COLORS = ["#a3d83b", "#7fd9b8", "#f6c344", "#7c6df0", "#ef7d7d", "#5cb8e4", "#c0a3e8"];
 const tooltipStyle = { borderRadius: 12, border: "1px solid #e7e2d4", fontSize: 12 };
@@ -87,9 +96,39 @@ export function ChannelDashboard({
     }
   }
 
-  // Tira's SRM portal binds its session to the live browser (F5 + SAP SSO), so
-  // server-side sync is rejected with "Unauthorized session". Instead we hand the
-  // user a one-liner that loads the in-browser collector on the portal itself.
+  // Tira now syncs server-side: /api/tira/sync drives a real headless browser
+  // through the SAP SSO login and scrapes the PO list — no console paste needed.
+  // (Its result shape differs from liveSync's, so it has its own handler.)
+  async function tiraSync() {
+    setBusy("scan");
+    const t = toast.loading("Syncing Tira POs — headless login may take ~1 min…");
+    try {
+      const res = await fetch(`/api/tira/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const contentType = res.headers.get("content-type") ?? "";
+      if (!contentType.includes("application/json")) throw new Error("__unavailable__");
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || "Sync failed");
+      const d = json.data;
+      toast.success(
+        `Synced ${d.fetched} Tira PO(s) — ${d.created} new, ${d.updated} updated`,
+        { id: t },
+      );
+      router.refresh();
+    } catch (e) {
+      const msg =
+        e instanceof Error && e.message !== "__unavailable__" ? e.message : "Sync not available yet";
+      toast.error(msg, { id: t });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Manual fallback: if the headless login ever breaks (portal change / locked
+  // session), copy a one-liner that runs the in-browser collector on the portal.
   async function tiraCollect() {
     const cmd = `fetch('${window.location.origin}/api/tira/collector').then(r=>r.text()).then(eval)`;
     try {
@@ -182,10 +221,16 @@ export function ChannelDashboard({
         </a>
       </Button>
       {channel.slug === "tira" ? (
-        <Button size="sm" onClick={tiraCollect} disabled={!!busy}>
-          <ClipboardList className="h-4 w-4" />
-          Collect from Tira
-        </Button>
+        <>
+          <Button size="sm" onClick={tiraSync} disabled={!!busy}>
+            {busy === "scan" || pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Sync from Tira
+          </Button>
+          <Button variant="outline" size="sm" onClick={tiraCollect} disabled={!!busy}>
+            <ClipboardList className="h-4 w-4" />
+            Manual collect
+          </Button>
+        </>
       ) : (
         <Button size="sm" onClick={liveSync} disabled={!!busy}>
           {busy === "scan" || pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -215,7 +260,7 @@ export function ChannelDashboard({
                 : `Click Sync from ${channel.name} to pull purchase orders once the integration is wired up.`
             }
             action={
-              <Button onClick={liveSync} disabled={!!busy}>
+              <Button onClick={channel.slug === "tira" ? tiraSync : liveSync} disabled={!!busy}>
                 <RefreshCw className="h-4 w-4" /> Sync from {channel.name}
               </Button>
             }
@@ -464,16 +509,39 @@ function PoTable({ rows }: { rows: ChannelInsights["pos"] }) {
                 </TableCell>
                 <TableCell className="text-muted-foreground">{formatDate(po.poDate)}</TableCell>
                 <TableCell>{po.outlet ?? po.city ?? "—"}</TableCell>
-                <TableCell>{po.rawStatus ? <Badge variant="outline">{po.rawStatus}</Badge> : "—"}</TableCell>
+                <TableCell>
+                  {ALLOCATED_OR_BEYOND.has(po.status) ? (
+                    <Badge className="border-transparent bg-success/15 text-success hover:bg-success/15">
+                      {po.status === "ALLOCATED" ? "Allocated" : titleCaseStatus(po.status)}
+                    </Badge>
+                  ) : po.rawStatus ? (
+                    <Badge variant="outline">{po.rawStatus}</Badge>
+                  ) : (
+                    "—"
+                  )}
+                </TableCell>
                 <TableCell className="text-right nums">{po.lineCount}</TableCell>
                 <TableCell className="text-right nums">{formatNumber(po.units)}</TableCell>
                 <TableCell className="text-right nums font-medium">{formatINR(po.value)}</TableCell>
                 <TableCell className="text-right">
-                  <Button asChild size="sm" variant="outline" className="h-7 px-2">
-                    <Link href={`/allocate/${po.id}`} onClick={(e) => e.stopPropagation()}>
-                      <ClipboardList className="h-3.5 w-3.5" /> Allocate
-                    </Link>
-                  </Button>
+                  {ALLOCATED_OR_BEYOND.has(po.status) ? (
+                    <span className="inline-flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-success">
+                        <CheckCircle2 className="h-3.5 w-3.5" /> Allocated
+                      </span>
+                      <Button asChild size="sm" variant="ghost" className="h-7 px-2 text-muted-foreground">
+                        <Link href={`/allocate/${po.id}`} onClick={(e) => e.stopPropagation()}>
+                          Re-allocate
+                        </Link>
+                      </Button>
+                    </span>
+                  ) : (
+                    <Button asChild size="sm" variant="outline" className="h-7 px-2">
+                      <Link href={`/allocate/${po.id}`} onClick={(e) => e.stopPropagation()}>
+                        <ClipboardList className="h-3.5 w-3.5" /> Allocate
+                      </Link>
+                    </Button>
+                  )}
                 </TableCell>
               </TableRow>
               {isOpen && (

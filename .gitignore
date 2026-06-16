@@ -38,3 +38,4 @@ __pycache__/
 
 # large media assets
 *.mp4
+.po-doc-cache/

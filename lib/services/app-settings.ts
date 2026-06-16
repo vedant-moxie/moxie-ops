@@ -27,6 +27,9 @@ interface AppSettingsData {
   poEmailTo?: string[];
   poEmailCc?: string[];
   locationRecipients?: LocationRecipientsMap;
+  /** Test-mode email sink: when on, ALL outgoing mail goes only to testEmailAddress. */
+  testEmailMode?: boolean;
+  testEmailAddress?: string;
 }
 
 async function getAppSettings(): Promise<AppSettingsData> {
@@ -108,4 +111,33 @@ export async function setLocationRecipients(
   const map = await getLocationRecipientsMap();
   const next: LocationRecipientsMap = { ...map, [location]: { to, cc } };
   await setAppSettings({ locationRecipients: next });
+}
+
+// ── Test-mode email sink ────────────────────────────────────────────────────
+// When enabled, every outgoing email (PO dispatch, GRN reminders, discrepancy
+// notices, etc.) is redirected so ONLY the test address receives it — nobody
+// else gets mailed. Used to safely exercise the email flows before deployment.
+
+export async function getTestEmailMode(): Promise<{ enabled: boolean; address: string }> {
+  const s = await getAppSettings();
+  return { enabled: !!s.testEmailMode, address: s.testEmailAddress ?? "" };
+}
+
+export async function setTestEmailMode(enabled: boolean, address: string): Promise<void> {
+  await setAppSettings({ testEmailMode: enabled, testEmailAddress: address.trim() });
+}
+
+/**
+ * The single source of truth every email sender consults right before sending.
+ * Returns the redirect address when test mode is on (and an address is set),
+ * otherwise null (send normally). Fails safe: if reading settings throws, we
+ * return null so a settings hiccup never silently swallows production mail.
+ */
+export async function getEmailRedirect(): Promise<string | null> {
+  try {
+    const { enabled, address } = await getTestEmailMode();
+    return enabled && address ? address : null;
+  } catch {
+    return null;
+  }
 }

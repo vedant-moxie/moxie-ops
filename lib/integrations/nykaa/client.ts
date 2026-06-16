@@ -135,6 +135,26 @@ export class NykaaClient {
   }
 
   /**
+   * Download the PO documents bundle (a ZIP containing the PO PDF/details) from
+   * the seller-portal download endpoint. Authenticated with the same x-access-token
+   * / x-domain headers. Returns the binary + the server-provided filename.
+   */
+  async downloadPoZip(poNumber: string): Promise<{ content: Buffer; filename: string }> {
+    const url =
+      `https://api-seller.nykaa.com/seller-portal/api/v1/download/po-grn-rtv-appointments-pdf` +
+      `?type=po&entityNumber=${encodeURIComponent(poNumber)}`;
+    const res = await this.req(url, { method: "GET", headers: { accept: "application/json, text/plain, */*" } });
+    if (!res.ok) throw new Error(`Nykaa PO-doc download failed: HTTP ${res.status}`);
+    const content = Buffer.from(await res.arrayBuffer());
+    // Nykaa exposes the name in a `filename` response header (it's CORS-exposed).
+    const header = res.headers.get("filename") ?? "";
+    const cd = res.headers.get("content-disposition") ?? "";
+    const cdMatch = cd.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
+    const filename = header || (cdMatch ? decodeURIComponent(cdMatch[1]!.replace(/"/g, "")) : `PODetails_${poNumber}.zip`);
+    return { content, filename };
+  }
+
+  /**
    * Fetch all PO records in [since, until] from the configured grid endpoint,
    * paging until exhausted. Returns raw records to be mapped by the ingest.
    *

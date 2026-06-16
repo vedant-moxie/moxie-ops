@@ -30,6 +30,9 @@ export interface SkuMasterMaps {
   myntraToInternal: Record<string, string>;
   purplleToInternal: Record<string, string>;
   tiraToInternal: Record<string, string>;
+  /** EAN/barcode → internalCode. The universal join — works for any channel whose
+   *  PO line carries an EAN, even when its channel-code column is wrong/missing. */
+  eanToInternal: Record<string, string>;
   /** CHANNEL (uppercase) → internalCode → expected unit taxable value */
   expectedTaxable: Record<string, Record<string, number>>;
   masterSkus: Set<string>;
@@ -45,6 +48,7 @@ export interface MasterRowLike {
   myntraCode?: string | null;
   purplleCode?: string | null;
   tiraCode?: string | null;
+  ean?: string | null;
   nykaaPids?: string | null;
   purpllePids?: string | null;
   taxableZepto?: number | null;
@@ -66,6 +70,7 @@ function mapsFromFile(): SkuMasterMaps {
     myntraToInternal: {},
     purplleToInternal: {},
     tiraToInternal: {},
+    eanToInternal: {},
     expectedTaxable: EXPECTED_TAXABLE_VALUE,
     masterSkus: MASTER_SKUS,
   };
@@ -89,6 +94,7 @@ export function buildMapsFromRows(rows: MasterRowLike[]): SkuMasterMaps {
   const myntraToInternal: Record<string, string> = {};
   const purplleToInternal: Record<string, string> = {};
   const tiraToInternal: Record<string, string> = {};
+  const eanToInternal: Record<string, string> = {};
   const ZEPTO: Record<string, number> = {};
   const NYKAA: Record<string, number> = {};
   const INSTAMART: Record<string, number> = {};
@@ -110,6 +116,7 @@ export function buildMapsFromRows(rows: MasterRowLike[]): SkuMasterMaps {
     if (r.myntraCode) myntraToInternal[r.myntraCode] = code;
     if (r.purplleCode) purplleToInternal[r.purplleCode] = code;
     if (r.tiraCode) tiraToInternal[r.tiraCode] = code;
+    if (r.ean) eanToInternal[String(r.ean).trim()] = code;
     for (const pid of splitIds(r.nykaaPids)) nykaaToInternal[pid] = code;
     for (const pid of splitIds(r.purpllePids)) purplleToInternal[pid] = code;
     if (r.taxableZepto != null) ZEPTO[code] = r.taxableZepto;
@@ -125,7 +132,7 @@ export function buildMapsFromRows(rows: MasterRowLike[]): SkuMasterMaps {
   };
   return {
     blinkitToInternal, zeptoToInternal, instamartToInternal, nykaaToInternal,
-    myntraToInternal, purplleToInternal, tiraToInternal,
+    myntraToInternal, purplleToInternal, tiraToInternal, eanToInternal,
     expectedTaxable, masterSkus,
   };
 }

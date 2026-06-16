@@ -255,7 +255,7 @@ export function SkuMappingReview({ skuIds, onResolved }: Props) {
             </span>
             {state === "idle" && (
               <span className="ml-1.5 text-amber-700 dark:text-amber-400">
-                — Click "Resolve" to auto-map via SKU Master
+                — Click &quot;Resolve&quot; to auto-map via SKU Master
               </span>
             )}
             {autoAppliedCount > 0 && state === "review" && (

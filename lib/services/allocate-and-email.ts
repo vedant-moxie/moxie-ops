@@ -3,9 +3,10 @@ import { prisma } from "@/lib/db";
 import { writeAudit } from "@/lib/services/audit";
 import { sendPoPreparationEmail } from "@/lib/integrations/po-test-email";
 import type { EmailAttachment } from "@/lib/integrations/po-test-email";
-import { getPoDocuments, extractGstinFromPdf, resolveDispatchFromForPo } from "@/lib/services/po-documents";
+import { getPoDocuments, extractGstinsFromDoc, resolveDispatchFromForPo } from "@/lib/services/po-documents";
 import { resolveDispatchFromGstins } from "@/lib/services/po-documents-helpers";
-import { resolveInternalSku } from "@/lib/services/sku-resolver";
+import { resolveLineInternalSku, eanFromRaw } from "@/lib/services/sku-resolver";
+import { mapEansToInternal } from "@/lib/services/sku-ean-resolver";
 import { getLocationRecipients } from "@/lib/services/app-settings";
 import { validatePoTaxables } from "@/lib/services/taxable-validation";
 import { claimPo, PoClaimedError } from "@/lib/services/po-claim";
@@ -46,6 +47,26 @@ function extractRaw(obj: unknown, keys: string[]): string {
       const v = data[key];
       if (typeof v === "string" && v.trim()) return v.trim();
     }
+  }
+  return "—";
+}
+
+// Location/WH for the email — the precise dock/warehouse code, tried in priority
+// order (NOT first-key-wins like extractRaw): Zepto `location`="MUM-DRY-MH3",
+// Nykaa `location`="KOL". Falls back to facility/outlet/city if those are absent.
+const LOCATION_PRIORITY = [
+  "location", "locationcode", "dcname", "dc", "facilityname", "facility_name",
+  "facility", "warehouse", "store", "outlet", "destination", "locationname", "city",
+];
+function pickByPriority(obj: unknown, orderedKeys: string[]): string {
+  if (!obj || typeof obj !== "object") return "—";
+  const data = obj as Record<string, unknown>;
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const byNorm = new Map<string, unknown>();
+  for (const k of Object.keys(data)) byNorm.set(norm(k), data[k]);
+  for (const key of orderedKeys) {
+    const v = byNorm.get(norm(key));
+    if (typeof v === "string" && v.trim()) return v.trim();
   }
   return "—";
 }
@@ -178,12 +199,15 @@ export async function allocateAndEmailPo(
 
     if (po) {
       const allocMap = Object.fromEntries(allocations.map((a) => [a.skuId, a.approvedQty]));
+      // Authoritative EAN→internal map (DB) so the email shows our WMS codes even
+      // when the channel-code map can't resolve (e.g. Zepto's pvId-based zeptoCode).
+      const eanMap = await mapEansToInternal(po.lineItems.map((l) => eanFromRaw(l.rawData))).catch(() => new Map<string, string>());
 
       const firstLineRaw = po.lineItems[0]?.rawData;
       const location =
-        extractRaw(po.rawData, FACILITY_KEYS) !== "—"
-          ? extractRaw(po.rawData, FACILITY_KEYS)
-          : extractRaw(firstLineRaw, FACILITY_KEYS);
+        pickByPriority(po.rawData, LOCATION_PRIORITY) !== "—"
+          ? pickByPriority(po.rawData, LOCATION_PRIORITY)
+          : pickByPriority(firstLineRaw, LOCATION_PRIORITY);
 
       let dispatchFrom =
         extractRaw(po.rawData, DISPATCH_KEYS) !== "—"
@@ -197,10 +221,14 @@ export async function allocateAndEmailPo(
           attachments.push({
             filename: docs.pdf.filename,
             content: docs.pdf.content,
-            contentType: "application/pdf",
+            contentType: docs.pdf.filename.toLowerCase().endsWith(".zip")
+              ? "application/zip"
+              : "application/pdf",
           });
+          // Resolve dispatch-from from the supplier (Moxie) GSTIN on the PO doc.
+          // Handles a PDF or a ZIP-of-PDF (Nykaa) — unzips and reads the inner PDF.
           try {
-            const gstins = await extractGstinFromPdf(docs.pdf.content);
+            const gstins = await extractGstinsFromDoc(docs.pdf.content, docs.pdf.filename);
             const resolved = resolveDispatchFromGstins(gstins);
             if (resolved.dispatchFrom) dispatchFrom = resolved.dispatchFrom;
             if (resolved.warning) console.warn("[allocate-and-email] dispatchFrom:", resolved.warning);
@@ -258,10 +286,15 @@ export async function allocateAndEmailPo(
                 : (l.approvedQty ?? 0) > 0
                   ? l.approvedQty!
                   : l.requestedQty;
-            const channelCode = l.channelSkuCode ?? l.sku.internalCode;
-            const sku = l.channelSkuCode
-              ? resolveInternalSku(po.source, l.channelSkuCode)
-              : channelCode;
+            // Show the warehouse our internal/WMS code, not the raw channel id.
+            // Resolve via channel-code map, then the line's EAN (covers Zepto, whose
+            // channelSkuCode doesn't match the master's pvId-based zeptoCode).
+            const sku = resolveLineInternalSku({
+              source: po.source,
+              channelCode: l.channelSkuCode ?? l.sku.internalCode,
+              ean: eanFromRaw(l.rawData),
+              eanMap,
+            });
             return { sku, qty };
           })
           .filter((l) => l.qty > 0),
@@ -316,10 +349,17 @@ export async function allocateAndEmailPo(
         }
 
         if (warehouse) {
+          const wmsEanMap = await mapEansToInternal(wmsPo.lineItems.map((l) => eanFromRaw(l.rawData))).catch(() => new Map<string, string>());
           const allocLines = wmsPo.lineItems
             .filter((l) => (l.approvedQty ?? 0) > 0)
             .map((l) => ({
-              skuCode: l.sku.internalCode,
+              // WMS expects our internal code (GCS200…), not the raw channel id.
+              skuCode: resolveLineInternalSku({
+                source: wmsPo.source,
+                channelCode: l.sku.internalCode,
+                ean: eanFromRaw(l.rawData),
+                eanMap: wmsEanMap,
+              }),
               skuDescription: l.sku.name,
               quantity: l.approvedQty!,
               mrp: l.unitPrice ?? 0,

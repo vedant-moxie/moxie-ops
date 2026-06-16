@@ -40,6 +40,12 @@ export async function register() {
     console.error("[instrumentation] failed to start Nykaa auto-sync", e);
   }
   try {
+    const { startTiraAutoSync } = await import("@/lib/services/tira-scheduler");
+    startTiraAutoSync();
+  } catch (e) {
+    console.error("[instrumentation] failed to start Tira auto-sync", e);
+  }
+  try {
     const { startWmsStockAutoSync } = await import("@/lib/services/wms-stock-scheduler");
     startWmsStockAutoSync();
   } catch (e) {

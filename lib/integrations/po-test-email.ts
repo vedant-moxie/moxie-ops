@@ -2,7 +2,7 @@ import "server-only";
 import nodemailer from "nodemailer";
 import { env, requireEnv } from "@/lib/env";
 import { nextEmailRef, getSeries } from "@/lib/services/email-ref-counter";
-import { getPoEmailRecipients } from "@/lib/services/app-settings";
+import { getPoEmailRecipients, getEmailRedirect } from "@/lib/services/app-settings";
 
 export interface PoPreparationEmailResult {
   messageId: string;
@@ -97,15 +97,28 @@ export async function sendPoPreparationEmail(data: PoEmailData): Promise<PoPrepa
   const configured = await getPoEmailRecipients();
   const toList = data.to && data.to.length > 0 ? data.to : configured.to;
   const ccList = data.cc !== undefined ? data.cc : configured.cc;
-  const toStr = toList.join(", ");
-  const ccStr = ccList.join(", ");
+  let toStr = toList.join(", ");
+  let ccStr = ccList.join(", ");
 
   // Assign the next reference (atomic, distinct per concurrent send). The prefix is
   // the editable series prefix from the Counter, not the env default.
-  const subject =
+  let subject =
     data.refNumber != null
       ? `${(await getSeries()).prefix}${data.refNumber}`
       : (await nextEmailRef()).ref;
+
+  // Test-mode sink: redirect everything to the test address; drop cc so nobody
+  // else is mailed. Keep the intended recipients visible in the subject/body.
+  const redirect = await getEmailRedirect();
+  let testBanner = "";
+  if (redirect) {
+    const intended = `To: ${toStr || "(none)"}${ccStr ? ` · Cc: ${ccStr}` : ""}`;
+    console.log(`[po-email] TEST MODE → redirecting "${subject}" (${intended}) to ${redirect}`);
+    testBanner = `<div style="background:#fff7d6;border:1px solid #e6cf6a;border-radius:8px;padding:10px 12px;margin-bottom:16px;font-family:Arial,sans-serif;font-size:13px;color:#665200">🧪 <b>Test mode</b> — this email would normally go to → ${intended}</div>`;
+    subject = `[TEST] ${subject}`;
+    toStr = redirect;
+    ccStr = "";
+  }
 
   const transport = nodemailer.createTransport({
     host: "smtp.gmail.com",
@@ -118,7 +131,7 @@ export async function sendPoPreparationEmail(data: PoEmailData): Promise<PoPrepa
     from: `"Moxie Ops" <${user}>`,
     to: toStr,
     subject,
-    html: buildHtml(data),
+    html: testBanner + buildHtml(data),
     text: buildText(data),
     attachments: data.attachments?.map((a) => ({
       filename: a.filename,

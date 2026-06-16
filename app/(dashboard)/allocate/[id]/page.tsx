@@ -8,7 +8,8 @@ import { StatusBadge } from "@/components/orders/status-badge";
 import { PoAllocator } from "@/components/allocation/po-allocator";
 import { getPoForAllocation } from "@/lib/data/queries";
 import { validatePoTaxables } from "@/lib/services/taxable-validation";
-import { resolveInternalSku } from "@/lib/services/sku-resolver";
+import { resolveInternalSku, resolveLineInternalSku, eanFromRaw } from "@/lib/services/sku-resolver";
+import { mapEansToInternal } from "@/lib/services/sku-ean-resolver";
 import { currentActor } from "@/lib/auth";
 import { isClaimedByOther } from "@/lib/services/po-claim";
 import { readWarehouseStock } from "@/lib/services/wms-stock-sync";
@@ -29,10 +30,12 @@ export default async function AllocatePoPage({ params }: { params: { id: string 
   for (const l of po.grnRecord?.lineItems ?? []) receivedBySku[l.skuId] = l.receivedQty;
 
   const skuIds = po.lineItems.map((l) => l.skuId);
-  // Live WMS stock + the shipping warehouse (from the GSTIN on the PO PDF), in parallel
-  const [warehouseStock, dispatch] = await Promise.all([
+  // Live WMS stock + the shipping warehouse (from the GSTIN on the PO PDF) +
+  // the authoritative EAN→internal map (DB-backed), in parallel.
+  const [warehouseStock, dispatch, eanMap] = await Promise.all([
     readWarehouseStock(skuIds).catch(() => ({})),
     resolveDispatchFromForPo(po).catch(() => null),
+    mapEansToInternal(po.lineItems.map((l) => eanFromRaw(l.rawData))).catch(() => new Map<string, string>()),
   ]);
 
   // SKUs that have no WMS stock entry AND whose internalCode looks like a raw channel item ID
@@ -131,8 +134,15 @@ export default async function AllocatePoPage({ params }: { params: { id: string 
               rawData: (l.rawData as Record<string, string> | null),
               // Internal/master SKU code for display — resolved server-side where the
               // DB-backed master maps are live (the client bundle only has file defaults).
-              // Falls back to the raw platform code for still-unmapped SKUs (flagged below).
-              displaySkuCode: resolveInternalSku(po.channel.name, l.channelSkuCode ?? l.sku.internalCode),
+              // Tries the channel-code map, then the line's EAN (covers channels whose
+              // code column is wrong/missing, e.g. Zepto's pvId). Falls back to the raw
+              // platform code for still-unmapped SKUs (flagged below).
+              displaySkuCode: resolveLineInternalSku({
+                source: po.channel.name,
+                channelCode: l.channelSkuCode ?? l.sku.internalCode,
+                ean: eanFromRaw(l.rawData),
+                eanMap,
+              }),
               flag: f ? { mismatch: f.mismatch, unmapped: f.unmapped, reason: f.reason } : null,
             };
           })}

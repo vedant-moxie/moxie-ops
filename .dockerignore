@@ -1,0 +1,22 @@
+# Build context excludes — keep the image lean & secrets out.
+node_modules
+.next
+.git
+.gitignore
+.po-doc-cache
+.ao
+.claude
+.vscode
+.idea
+# Secrets — the build uses a dummy DATABASE_URL; real env is injected at runtime.
+.env
+.env.*
+# Local-only junk
+*.log
+.DS_Store
+**/.DS_Store
+scripts/*.png
+Dockerfile
+docker-compose.yml
+.dockerignore
+README*.md
