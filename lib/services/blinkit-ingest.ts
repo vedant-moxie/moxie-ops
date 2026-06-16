@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
 import { writeAudit } from "@/lib/services/audit";
+import { poLockState } from "@/lib/services/ingest-guard";
 import type { ParsedSheet } from "@/lib/integrations/blinkit/parse";
 import { resolveFields, toNumber, toDate, type FieldMap } from "@/lib/integrations/blinkit/fields";
 
@@ -179,6 +180,8 @@ export async function ingestBlinkitDump(
 
     const externalId = `blinkit:${poNo}`;
     await prisma.$transaction(async (tx) => {
+      // Allocation latch: once a PO is allocated+, sync must not clobber it.
+      const locked = (await poLockState(tx, externalId))?.locked ?? false;
       const po = await tx.purchaseOrder.upsert({
         where: { externalId },
         create: {
@@ -194,41 +197,46 @@ export async function ingestBlinkitDump(
           rawEmailSubject: `Blinkit PO ${poNo}`,
           ...(poDate ? { createdAt: poDate } : {}),
         },
-        update: {
-          channelPoNumber: poNo,
-          status,
-          poDate: poDate ?? undefined,
-          requestedDeliveryDate: deliveryDate ?? undefined,
-          totalRequestedValue: total || null,
-          rawData: head as Prisma.InputJsonValue,
-        },
+        // Locked PO: refresh only the raw snapshot; preserve allocation + GRN.
+        update: locked
+          ? { rawData: head as Prisma.InputJsonValue }
+          : {
+              channelPoNumber: poNo,
+              status,
+              poDate: poDate ?? undefined,
+              requestedDeliveryDate: deliveryDate ?? undefined,
+              totalRequestedValue: total || null,
+              rawData: head as Prisma.InputJsonValue,
+            },
       });
 
-      // Replace line items (idempotent re-import)
-      await tx.poLineItem.deleteMany({ where: { poId: po.id } });
-      for (const { line } of lineData) {
-        await tx.poLineItem.create({ data: { ...line, poId: po.id } });
-      }
+      if (!locked) {
+        // Replace line items (idempotent re-import)
+        await tx.poLineItem.deleteMany({ where: { poId: po.id } });
+        for (const { line } of lineData) {
+          await tx.poLineItem.create({ data: { ...line, poId: po.id } });
+        }
 
-      // Replace GRN (received quantities) — partnersbiz reports remaining qty per SKU,
-      // so received = ordered - remaining. Stored as a PORTAL GRN so PO detail shows it.
-      await tx.discrepancy.deleteMany({ where: { poId: po.id } });
-      await tx.grnRecord.deleteMany({ where: { poId: po.id } });
-      if (hasGrn) {
-        await tx.grnRecord.create({
-          data: {
-            poId: po.id,
-            source: "PORTAL",
-            channelGrnNumber: null,
-            status: allReceived ? "ACCEPTED" : "PENDING_RECONCILIATION",
-            receivedAt: deliveryDate ?? poDate ?? undefined,
-            lineItems: {
-              create: lineData
-                .filter((l) => l.received > 0)
-                .map((l) => ({ skuId: l.line.skuId, receivedQty: l.received, rejectedQty: 0 })),
+        // Replace GRN (received quantities) — partnersbiz reports remaining qty per SKU,
+        // so received = ordered - remaining. Stored as a PORTAL GRN so PO detail shows it.
+        await tx.discrepancy.deleteMany({ where: { poId: po.id } });
+        await tx.grnRecord.deleteMany({ where: { poId: po.id } });
+        if (hasGrn) {
+          await tx.grnRecord.create({
+            data: {
+              poId: po.id,
+              source: "PORTAL",
+              channelGrnNumber: null,
+              status: allReceived ? "ACCEPTED" : "PENDING_RECONCILIATION",
+              receivedAt: deliveryDate ?? poDate ?? undefined,
+              lineItems: {
+                create: lineData
+                  .filter((l) => l.received > 0)
+                  .map((l) => ({ skuId: l.line.skuId, receivedQty: l.received, rejectedQty: 0 })),
+              },
             },
-          },
-        });
+          });
+        }
       }
 
       await writeAudit({
@@ -237,7 +245,7 @@ export async function ingestBlinkitDump(
         entityId: po.id,
         action: "BLINKIT_IMPORTED",
         performedBy: actorLabel,
-        changes: { poNumber: poNo, lines: lineData.length, totalValue: total, received: totalReceived, status },
+        changes: { poNumber: poNo, lines: lineData.length, totalValue: total, received: totalReceived, status, locked },
       });
     });
     posUpserted++;

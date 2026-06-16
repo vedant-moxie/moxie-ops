@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
 import { writeAudit } from "@/lib/services/audit";
+import { poLockState } from "@/lib/services/ingest-guard";
 import type { ParsedSheet } from "@/lib/integrations/blinkit/parse";
 import { resolveFields, toNumber, toDate, type FieldMap } from "@/lib/integrations/blinkit/fields";
 
@@ -183,6 +184,8 @@ export async function ingestLiveInstamartPOs(
 
     const externalId = `instamart:${poNo}`;
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // Allocation latch: once a PO is allocated+, sync must not clobber it.
+      const locked = (await poLockState(tx, externalId))?.locked ?? false;
       const dbPo = await tx.purchaseOrder.upsert({
         where: { externalId },
         create: {
@@ -191,44 +194,49 @@ export async function ingestLiveInstamartPOs(
           rawData: po as Prisma.InputJsonValue, rawEmailSubject: `Instamart PO ${poNo}`,
           ...(poDate ? { createdAt: poDate } : {}),
         },
-        update: { channelPoNumber: poNo, status, poDate, requestedDeliveryDate: expiryDate, totalRequestedValue: totalValue, rawData: po as Prisma.InputJsonValue },
+        // Locked PO: only refresh the raw snapshot — keep status/qty/GRN/allocation.
+        update: locked
+          ? { rawData: po as Prisma.InputJsonValue }
+          : { channelPoNumber: poNo, status, poDate, requestedDeliveryDate: expiryDate, totalRequestedValue: totalValue, rawData: po as Prisma.InputJsonValue },
       });
 
-      await tx.poLineItem.deleteMany({ where: { poId: dbPo.id } });
-      for (const line of resolvedLines) {
-        await tx.poLineItem.create({
-          data: {
-            poId: dbPo.id,
-            skuId: line.skuId,
-            channelSkuCode: line.channelSkuCode,
-            requestedQty: line.requestedQty,
-            unitPrice: line.unitPrice,
-            rawData: line.rawData,
-          },
-        });
-      }
-
-      await tx.discrepancy.deleteMany({ where: { poId: dbPo.id } });
-      await tx.grnRecord.deleteMany({ where: { poId: dbPo.id } });
-      const grnLines = resolvedLines.filter((l) => l.receivedQty > 0);
-      if (grnLines.length > 0) {
-        const allReceived = totalReceivedQty >= totalQty && totalQty > 0;
-        await tx.grnRecord.create({
-          data: {
-            poId: dbPo.id, source: "PORTAL", channelGrnNumber: null,
-            status: allReceived ? "ACCEPTED" : "PENDING_RECONCILIATION",
-            receivedAt: expiryDate ?? poDate,
-            lineItems: {
-              create: grnLines.map((l) => ({ skuId: l.skuId, receivedQty: l.receivedQty, rejectedQty: 0 as const })),
+      if (!locked) {
+        await tx.poLineItem.deleteMany({ where: { poId: dbPo.id } });
+        for (const line of resolvedLines) {
+          await tx.poLineItem.create({
+            data: {
+              poId: dbPo.id,
+              skuId: line.skuId,
+              channelSkuCode: line.channelSkuCode,
+              requestedQty: line.requestedQty,
+              unitPrice: line.unitPrice,
+              rawData: line.rawData,
             },
-          },
-        });
+          });
+        }
+
+        await tx.discrepancy.deleteMany({ where: { poId: dbPo.id } });
+        await tx.grnRecord.deleteMany({ where: { poId: dbPo.id } });
+        const grnLines = resolvedLines.filter((l) => l.receivedQty > 0);
+        if (grnLines.length > 0) {
+          const allReceived = totalReceivedQty >= totalQty && totalQty > 0;
+          await tx.grnRecord.create({
+            data: {
+              poId: dbPo.id, source: "PORTAL", channelGrnNumber: null,
+              status: allReceived ? "ACCEPTED" : "PENDING_RECONCILIATION",
+              receivedAt: expiryDate ?? poDate,
+              lineItems: {
+                create: grnLines.map((l) => ({ skuId: l.skuId, receivedQty: l.receivedQty, rejectedQty: 0 as const })),
+              },
+            },
+          });
+        }
       }
 
       await writeAudit({
         tx, entityType: "PurchaseOrder", entityId: dbPo.id, action: "INSTAMART_IMPORTED",
         performedBy: actorLabel,
-        changes: { poNumber: poNo, lines: resolvedLines.length, totalValue, totalReceivedQty, status },
+        changes: { poNumber: poNo, lines: resolvedLines.length, totalValue, totalReceivedQty, status, locked },
       });
     });
 
@@ -417,6 +425,7 @@ export async function ingestInstamartRows(
 
     const externalId = `instamart:${poNo}`;
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const locked = (await poLockState(tx, externalId))?.locked ?? false;
       const po = await tx.purchaseOrder.upsert({
         where: { externalId },
         create: {
@@ -432,40 +441,45 @@ export async function ingestInstamartRows(
           rawEmailSubject: `Instamart PO ${poNo}`,
           ...(poDate ? { createdAt: poDate } : {}),
         },
-        update: {
-          channelPoNumber: poNo,
-          status,
-          poDate: poDate ?? undefined,
-          requestedDeliveryDate: deliveryDate ?? undefined,
-          totalRequestedValue: total || null,
-          rawData: head as Prisma.InputJsonValue,
-        },
+        // Locked PO: refresh only the raw snapshot; preserve allocation + GRN.
+        update: locked
+          ? { rawData: head as Prisma.InputJsonValue }
+          : {
+              channelPoNumber: poNo,
+              status,
+              poDate: poDate ?? undefined,
+              requestedDeliveryDate: deliveryDate ?? undefined,
+              totalRequestedValue: total || null,
+              rawData: head as Prisma.InputJsonValue,
+            },
       });
 
-      // Replace line items (idempotent re-import).
-      await tx.poLineItem.deleteMany({ where: { poId: po.id } });
-      for (const { line } of lineData) {
-        await tx.poLineItem.create({ data: { ...line, poId: po.id } });
-      }
+      if (!locked) {
+        // Replace line items (idempotent re-import).
+        await tx.poLineItem.deleteMany({ where: { poId: po.id } });
+        for (const { line } of lineData) {
+          await tx.poLineItem.create({ data: { ...line, poId: po.id } });
+        }
 
-      // Replace GRN (received quantities). Stored as a PORTAL GRN so PO detail shows it.
-      await tx.discrepancy.deleteMany({ where: { poId: po.id } });
-      await tx.grnRecord.deleteMany({ where: { poId: po.id } });
-      if (hasGrn) {
-        await tx.grnRecord.create({
-          data: {
-            poId: po.id,
-            source: "PORTAL",
-            channelGrnNumber: null,
-            status: allReceived ? "ACCEPTED" : "PENDING_RECONCILIATION",
-            receivedAt: deliveryDate ?? poDate ?? undefined,
-            lineItems: {
-              create: lineData
-                .filter((l) => l.received > 0)
-                .map((l) => ({ skuId: l.line.skuId, receivedQty: l.received, rejectedQty: 0 })),
+        // Replace GRN (received quantities). Stored as a PORTAL GRN so PO detail shows it.
+        await tx.discrepancy.deleteMany({ where: { poId: po.id } });
+        await tx.grnRecord.deleteMany({ where: { poId: po.id } });
+        if (hasGrn) {
+          await tx.grnRecord.create({
+            data: {
+              poId: po.id,
+              source: "PORTAL",
+              channelGrnNumber: null,
+              status: allReceived ? "ACCEPTED" : "PENDING_RECONCILIATION",
+              receivedAt: deliveryDate ?? poDate ?? undefined,
+              lineItems: {
+                create: lineData
+                  .filter((l) => l.received > 0)
+                  .map((l) => ({ skuId: l.line.skuId, receivedQty: l.received, rejectedQty: 0 })),
+              },
             },
-          },
-        });
+          });
+        }
       }
 
       await writeAudit({

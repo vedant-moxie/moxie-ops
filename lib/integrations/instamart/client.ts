@@ -39,26 +39,39 @@ function renderBodyTemplate(
   template: string | undefined,
   vars: { since: string; until: string; page: number; pageSize: number; offset: number },
 ): Record<string, unknown> {
-  if (!template) {
-    // Default body shape captured from picker.swiggy.com/api/v1/searchPurchaseOrder.
-    // Uses INSTAMART_BRAND_COMPANY_ID (SHA-1 internal hash) + epoch ms date filter.
-    return {
-      filters: {
-        "order_dates.release_date": toISTEpochMs(vars.since),
-        "brand_company_id": env.INSTAMART_BRAND_COMPANY_ID,
-        "selling_party.id": "",
-      },
-      pagination: { page_number: vars.page + 1, size: vars.pageSize },
-      sort: [{ sort_by: "pending_qty", sort_order: "DESC" }],
-      query: { id: "", "ship_to_party.name": "" },
-    };
+  // Default body shape captured from picker.swiggy.com/api/v1/searchPurchaseOrder.
+  // Uses INSTAMART_BRAND_COMPANY_ID (SHA-1 internal hash) + epoch ms date filter.
+  // Used when no template is configured AND as a resilient fallback when a
+  // configured template is malformed (e.g. mangled while pasting env vars into a
+  // deploy platform) — so a bad env value never breaks the sync.
+  const defaultBody = (): Record<string, unknown> => ({
+    filters: {
+      "order_dates.release_date": toISTEpochMs(vars.since),
+      "brand_company_id": env.INSTAMART_BRAND_COMPANY_ID,
+      "selling_party.id": "",
+    },
+    pagination: { page_number: vars.page + 1, size: vars.pageSize },
+    sort: [{ sort_by: "pending_qty", sort_order: "DESC" }],
+    query: { id: "", "ship_to_party.name": "" },
+  });
+
+  // Normalize: trim + strip one layer of surrounding quotes (env editors sometimes
+  // keep the quotes from a .env line, which would break JSON.parse).
+  let tpl = (template ?? "").trim();
+  if (
+    tpl.length >= 2 &&
+    ((tpl.startsWith("'") && tpl.endsWith("'")) || (tpl.startsWith('"') && tpl.endsWith('"')))
+  ) {
+    tpl = tpl.slice(1, -1).trim();
   }
+  if (!tpl) return defaultBody();
+
   // Quote-stripping replacements: '"{foo}"' removes surrounding quotes so the
   // placeholder becomes a bare JSON integer/number instead of a string.
   // IMPORTANT: "{page}" injects the 1-based page number (page+1) because REST
   // APIs that use page_number fields are universally 1-based. Use {page} (no
   // surrounding quotes) if you need the raw 0-based loop variable.
-  const filled = template
+  const filled = tpl
     .replaceAll('"{page}"', String(vars.page + 1))    // 1-based page number (integer)
     .replaceAll('"{pageSize}"', String(vars.pageSize)) // integer
     .replaceAll('"{offset}"', String(vars.offset))     // integer
@@ -71,9 +84,17 @@ function renderBodyTemplate(
     .replaceAll("{page}", String(vars.page))           // 0-based (for custom offset math)
     .replaceAll("{pageSize}", String(vars.pageSize))
     .replaceAll("{offset}", String(vars.offset));
-  const parsed = JSON.parse(filled) as unknown;
-  if (!isRecord(parsed)) throw new InstamartAPIError("INSTAMART_PO_LIST_BODY must be a JSON object");
-  return parsed;
+  try {
+    const parsed = JSON.parse(filled) as unknown;
+    if (isRecord(parsed)) return parsed;
+    console.warn("[instamart] INSTAMART_PO_LIST_BODY is not a JSON object — using default body");
+  } catch (err) {
+    console.warn(
+      `[instamart] INSTAMART_PO_LIST_BODY failed to parse (${err instanceof Error ? err.message : String(err)}) — ` +
+        `using the built-in default body. Check the env var for stray quotes/spaces.`,
+    );
+  }
+  return defaultBody();
 }
 
 /**

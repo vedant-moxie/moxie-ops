@@ -2,6 +2,7 @@ import "server-only";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAudit } from "@/lib/services/audit";
+import { poLockState } from "@/lib/services/ingest-guard";
 
 export interface IngestSummary {
   source: "nykaa";
@@ -207,6 +208,8 @@ export async function ingestLiveNykaaPOs(
 
     const externalId = `nykaa:${poNo}`;
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // Allocation latch: once a PO is allocated+, sync must not clobber it.
+      const locked = (await poLockState(tx, externalId))?.locked ?? false;
       const dbPo = await tx.purchaseOrder.upsert({
         where: { externalId },
         create: {
@@ -215,47 +218,52 @@ export async function ingestLiveNykaaPOs(
           rawData: po as Prisma.InputJsonValue, rawEmailSubject: `Nykaa PO ${poNo}`,
           ...(poDate ? { createdAt: poDate } : {}),
         },
-        update: {
-          channelPoNumber: poNo, status, poDate, requestedDeliveryDate: expiryDate,
-          totalRequestedValue: totalValue, rawData: po as Prisma.InputJsonValue,
-        },
+        // Locked PO: only refresh the raw snapshot — keep status/qty/GRN/allocation.
+        update: locked
+          ? { rawData: po as Prisma.InputJsonValue }
+          : {
+              channelPoNumber: poNo, status, poDate, requestedDeliveryDate: expiryDate,
+              totalRequestedValue: totalValue, rawData: po as Prisma.InputJsonValue,
+            },
       });
 
-      await tx.poLineItem.deleteMany({ where: { poId: dbPo.id } });
-      for (const line of resolvedLines) {
-        await tx.poLineItem.create({
-          data: {
-            poId: dbPo.id,
-            skuId: line.skuId,
-            channelSkuCode: line.channelSkuCode,
-            requestedQty: line.requestedQty,
-            unitPrice: line.unitPrice,
-            rawData: line.rawData,
-          },
-        });
-      }
-
-      await tx.discrepancy.deleteMany({ where: { poId: dbPo.id } });
-      await tx.grnRecord.deleteMany({ where: { poId: dbPo.id } });
-      const grnLines = resolvedLines.filter((l) => l.receivedQty > 0);
-      if (grnLines.length > 0) {
-        const allReceived = totalReceivedQty >= totalQty && totalQty > 0;
-        await tx.grnRecord.create({
-          data: {
-            poId: dbPo.id, source: "PORTAL", channelGrnNumber: null,
-            status: allReceived ? "ACCEPTED" : "PENDING_RECONCILIATION",
-            receivedAt: expiryDate ?? poDate,
-            lineItems: {
-              create: grnLines.map((l) => ({ skuId: l.skuId, receivedQty: l.receivedQty, rejectedQty: 0 })),
+      if (!locked) {
+        await tx.poLineItem.deleteMany({ where: { poId: dbPo.id } });
+        for (const line of resolvedLines) {
+          await tx.poLineItem.create({
+            data: {
+              poId: dbPo.id,
+              skuId: line.skuId,
+              channelSkuCode: line.channelSkuCode,
+              requestedQty: line.requestedQty,
+              unitPrice: line.unitPrice,
+              rawData: line.rawData,
             },
-          },
-        });
+          });
+        }
+
+        await tx.discrepancy.deleteMany({ where: { poId: dbPo.id } });
+        await tx.grnRecord.deleteMany({ where: { poId: dbPo.id } });
+        const grnLines = resolvedLines.filter((l) => l.receivedQty > 0);
+        if (grnLines.length > 0) {
+          const allReceived = totalReceivedQty >= totalQty && totalQty > 0;
+          await tx.grnRecord.create({
+            data: {
+              poId: dbPo.id, source: "PORTAL", channelGrnNumber: null,
+              status: allReceived ? "ACCEPTED" : "PENDING_RECONCILIATION",
+              receivedAt: expiryDate ?? poDate,
+              lineItems: {
+                create: grnLines.map((l) => ({ skuId: l.skuId, receivedQty: l.receivedQty, rejectedQty: 0 })),
+              },
+            },
+          });
+        }
       }
 
       await writeAudit({
         tx, entityType: "PurchaseOrder", entityId: dbPo.id, action: "NYKAA_IMPORTED",
         performedBy: actorLabel,
-        changes: { poNumber: poNo, lines: resolvedLines.length, totalValue, totalReceivedQty, status },
+        changes: { poNumber: poNo, lines: resolvedLines.length, totalValue, totalReceivedQty, status, locked },
       });
     });
 
