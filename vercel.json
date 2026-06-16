@@ -21,6 +21,14 @@
       "schedule": "30 */3 * * *"
     },
     {
+      "path": "/api/cron/instamart-sync",
+      "schedule": "15 */3 * * *"
+    },
+    {
+      "path": "/api/cron/nykaa-sync",
+      "schedule": "45 */3 * * *"
+    },
+    {
       "path": "/api/cron/wms-stock-sync",
       "schedule": "*/15 * * * *"
     }
