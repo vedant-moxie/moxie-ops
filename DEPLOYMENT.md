@@ -1,74 +1,76 @@
 # Deployment
 
-Two supported targets. **Read the Playwright caveat before choosing Vercel.**
+Primary target: **Coolify** (Docker Compose). The app needs a real, persistent
+container — it drives a headless Chromium (Tira + GRN-portal scrapers) and runs
+in-process schedulers — so a container host is the right fit.
 
 ---
 
-## ⚠️ The one hard constraint: Playwright / Chromium
+## Coolify (recommended — this is what we deploy on)
 
-Two features drive a **real headless browser** server-side and therefore **cannot run on Vercel** (serverless functions have no Chromium and an ephemeral, size-limited, read-only filesystem):
+**New Application → Docker Compose build pack:**
+- **Repository:** `moxie-ops`
+- **Branch:** `main`
+- **Build Pack:** Docker Compose
+- **Base Directory:** `/`
+- **Docker Compose Location:** `/docker-compose.yaml`
 
-| Feature | Code | Vercel? |
-|---|---|---|
-| **Tira** scrape (`/api/tira/sync`, daily cron, the "Sync from Tira" button) | `lib/integrations/tira/browser.ts` (Playwright) | ❌ |
-| **GRN portal scrape** (`/api/cron/scrape-portals`) | `lib/integrations/playwright.ts` | ❌ |
+`docker-compose.yaml` builds the app image from `Dockerfile` (Playwright base →
+Chromium included) and brings up Postgres alongside it. The entrypoint runs
+`prisma migrate deploy` on every boot.
 
-Everything else (Blinkit / Zepto / Instamart / Nykaa syncs, WMS stock, email polling, the whole UI/API) is plain HTTP/IMAP and **works fine on Vercel**.
+### Environment variables (Coolify → app → Environment Variables)
+Add **everything from `.env.local`** (it's not in the repo by design). At minimum:
+- `CRON_SECRET` — not strictly required here (schedulers are in-process), but set it
+  if you want the `/api/cron/*` routes locked down.
+- `NEXT_PUBLIC_APP_URL` — your public URL (e.g. `https://ops.moxiebeauty.in`). The
+  schedulers use it to call their own cron endpoints.
+- `RESEND_*`, `PO_TEST_EMAIL_SMTP_*`, `WMS_*`, `TIRA_USER_ID` / `TIRA_PASSWORD`,
+  `NYKAA_*`, `ZEPTO_*`, `BLINKIT_*`, etc.
+- **Database:** the bundled `db` service is used by default (internal-only). To use a
+  managed Postgres instead, set `DATABASE_URL` and it overrides the bundle.
 
-So pick:
-
-- **Option A — one container host (simplest, everything works).** Deploy the Docker image to an always-on host (Render / Railway / Fly.io / a VM). Tira + GRN scrape + all schedulers work. No Vercel.
-- **Option B — Vercel + a small Tira worker (hybrid).** Vercel runs the app and the fetch-based crons; one cheap always-on container runs **only** Tira against the same database.
-
----
-
-## Option A — Docker (container host)
-
-```bash
-docker compose up -d --build
-```
-
-- `Dockerfile` (Playwright base → Chromium included) + `docker-compose.yml` (Postgres + app).
-- Entrypoint runs `prisma migrate deploy` on boot.
-- Put all secrets in `.env.local` (gitignored); compose overrides `DATABASE_URL`/`NEXT_PUBLIC_APP_URL` to point at the `db` service.
-- **Run a single app instance** — the in-process schedulers (`instrumentation.ts`) use timers that would double-fire if scaled. (They auto-disable on Vercel.)
-- Tira PDFs persist in the `podoc` volume.
-
-This is the recommended path for a browser-dependent app.
-
----
-
-## Option B — Vercel (+ Tira worker)
-
-### Vercel app
-1. Import the repo. Framework auto-detected (Next.js 14).
-2. **Env vars** (Project → Settings → Environment Variables): everything from `.env.local` — `DATABASE_URL` (a hosted Postgres: Neon / Supabase / Vercel Postgres), `RESEND_*`, `PO_TEST_EMAIL_SMTP_*`, `WMS_*`, channel creds, etc. Plus **`CRON_SECRET`** (any strong random string) — Vercel automatically sends it as `Authorization: Bearer <CRON_SECRET>` on cron calls, which `lib/cron.ts` checks.
-3. **Plan**: cron in `vercel.json` runs sub-daily and several sync routes set `maxDuration = 300` → these need the **Pro plan** (Hobby caps crons at once/day and functions at 60s).
-4. Run migrations against the hosted DB once: `DATABASE_URL=<prod> npx prisma migrate deploy`.
+### Domain
+Set a domain on the **app** service in Coolify; its Traefik proxy routes the domain
+(with SSL) to the exposed port 3000.
 
 ### Scheduling
-`vercel.json` already declares the crons (blinkit / zepto / instamart / nykaa / wms-stock / poll-emails). The in-process timers self-disable on Vercel (`process.env.VERCEL`), so there's no double-firing — Vercel Cron is the single scheduler.
+Runs **in-process** (`instrumentation.ts`): Tira at 09:00 IST, the other channels +
+WMS every 3h. **Keep it a single replica** — scaling would double-fire the timers.
+(`vercel.json` is ignored on Coolify; it's only for a Vercel deploy.)
 
-- **Times are UTC.** Adjust schedules accordingly (e.g. 9 AM IST = `30 3 * * *`).
-- `scrape-portals` is still listed but **no-ops on Vercel** (needs Chromium) — remove it or ignore the empty runs.
-- **No Tira cron is configured** on purpose (see below).
+### Resources
+The Playwright base image is ~1.7 GB; give the build host enough disk + RAM for
+`next build` and `npx playwright install chromium`.
 
-### Tira on Vercel = the worker
-Run the **Docker image** on one small always-on host, pointed at the **same `DATABASE_URL`** as Vercel, with only Tira's scheduler active:
+---
 
-```
-TIRA_AUTO_SYNC=true
-BLINKIT_AUTO_SYNC=false
-ZEPTO_AUTO_SYNC=false
-INSTAMART_AUTO_SYNC=false
-NYKAA_AUTO_SYNC=false
-WMS_STOCK_AUTO_SYNC=false   # if present
+## Local (same image)
+
+```bash
+docker compose up -d --build      # add a `ports: ["3000:3000"]` to the app service for host access
 ```
 
-The worker's instrumentation then starts only the Tira 09:00 IST scrape; it writes POs + caches PDFs to the shared DB/volume, and Vercel reads them. (The "Sync from Tira" button only works when hit on the worker's URL, not the Vercel one.)
+Or plain dev: `npm install && npx prisma generate && npm run dev`.
+
+---
+
+## The Playwright caveat (only matters off-Coolify)
+
+Two features need a real browser: **Tira** scrape (`lib/integrations/tira/browser.ts`)
+and the **GRN portal** scrape (`lib/integrations/playwright.ts`). They work on any
+container host (Coolify, Render, Railway, Fly, a VM) because Chromium is in the image.
+They **do not** work on serverless (Vercel) — no Chromium, ephemeral read-only FS.
+
+If you ever move the web app to **Vercel**: it would host everything *except* those
+two. `vercel.json` already has Vercel Cron for the fetch-based channel syncs, and the
+in-process timers auto-disable there (`process.env.VERCEL`). You'd run Tira on a small
+always-on container (this image) against the same `DATABASE_URL`, with only
+`TIRA_AUTO_SYNC=true` and the other `*_AUTO_SYNC=false`. Vercel needs the Pro plan
+(sub-daily cron + 300s functions); cron times are UTC (9 AM IST = `30 3 * * *`).
 
 ---
 
 ## Notes
 - `next build` runs ESLint and fails on lint errors — keep it clean.
-- Secrets live only in env / `.env.local`; never commit them.
+- Secrets live only in the host's env / Coolify UI; never commit them.
