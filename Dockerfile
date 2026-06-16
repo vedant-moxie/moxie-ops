@@ -28,7 +28,9 @@ RUN npm run build
 
 # ---------- runner ----------
 FROM base AS runner
-ENV NODE_ENV=production
+# PORT is read by `next start`; 3003 avoids clashing with other apps on the host.
+ENV NODE_ENV=production \
+    PORT=3003
 # node_modules carries the generated Prisma client AND the prisma CLI (a dev dep)
 # used by the entrypoint to run migrations at startup.
 COPY --from=builder /app/node_modules ./node_modules
@@ -41,6 +43,6 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # the entrypoint executable.
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
  && npx playwright install chromium
-EXPOSE 3000
+EXPOSE 3003
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["npm", "run", "start"]

@@ -19,12 +19,14 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
+      # App listens on 3003 (3000 is taken on the host). `next start` honours PORT.
+      PORT: "3003"
       DATABASE_URL: ${DATABASE_URL}
-      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3003}
     # Coolify routes your configured domain to this exposed port (Traefik). For raw
-    # host access instead, add a `ports: ["3000:3000"]` mapping.
+    # host access instead, add a `ports: ["3003:3003"]` mapping.
     expose:
-      - "3000"
+      - "3003"
     volumes:
       # Persist the Tira PO PDF cache across restarts.
       - podoc:/app/.po-doc-cache
