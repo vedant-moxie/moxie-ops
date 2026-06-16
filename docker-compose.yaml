@@ -1,47 +1,25 @@
-# Moxie Ops — production stack: Postgres + the Next.js app (with Chromium for scrapers).
+# Moxie Ops — production app (Next.js + Chromium for the Tira/Nykaa scrapers).
 #
-# Works on Coolify (Build Pack: Docker Compose) and locally (`docker compose up -d --build`).
+# Works on Coolify (Build Pack: Docker Compose) and locally.
+# Database is EXTERNAL (AWS RDS / any managed Postgres) — set DATABASE_URL.
 #
-# ENV / SECRETS:
-#   - On Coolify: add every variable from .env.local in the app's Environment Variables
-#     UI — Coolify injects them into the `app` container at runtime. (No .env.local is in
-#     the repo, by design.)
-#   - DATABASE_URL defaults to the bundled `db` service below; set DATABASE_URL in Coolify
-#     to point at a managed Postgres instead.
-#   - Run a SINGLE replica: the in-process schedulers (Tira 09:00 IST, others every 3h)
-#     would double-fire if scaled. They auto-disable only on Vercel, not here.
+# ENV / SECRETS (Coolify → app → Environment Variables; Coolify injects them):
+#   - DATABASE_URL  e.g. postgresql://USER:PASS@<rds-endpoint>:5432/moxie_ops?sslmode=require
+#   - NEXT_PUBLIC_APP_URL  your public URL (e.g. http://opsportal.toolsmb.in)
+#   - plus every other key from .env.local (Resend, WMS, Tira/Nykaa, Zepto, Blinkit, …)
+#
+# Run a SINGLE replica: the in-process schedulers (Tira 09:00 IST, others every 3h)
+# would double-fire if scaled.
 
 services:
-  db:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      # Internal-only DB (no published port). Override via DATABASE_URL for a managed DB.
-      POSTGRES_USER: moxie
-      POSTGRES_PASSWORD: moxie
-      POSTGRES_DB: moxie_ops
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U moxie -d moxie_ops"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-
   app:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
     environment:
       NODE_ENV: production
-      # Falls back to the bundled db; Coolify can override with a managed DATABASE_URL.
-      DATABASE_URL: ${DATABASE_URL:-postgresql://moxie:moxie@db:5432/moxie_ops}
-      # Set this to your public URL in Coolify (used by the in-app schedulers to call
-      # their own cron endpoints, and for absolute links).
+      DATABASE_URL: ${DATABASE_URL}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
     # Coolify routes your configured domain to this exposed port (Traefik). For raw
     # host access instead, add a `ports: ["3000:3000"]` mapping.
@@ -52,5 +30,4 @@ services:
       - podoc:/app/.po-doc-cache
 
 volumes:
-  pgdata:
   podoc:
