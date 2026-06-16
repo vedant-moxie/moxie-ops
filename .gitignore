@@ -39,3 +39,7 @@ __pycache__/
 # large media assets
 *.mp4
 .po-doc-cache/
+
+# Local-only secrets / DB dump (never commit)
+coolify.env
+*.dump
