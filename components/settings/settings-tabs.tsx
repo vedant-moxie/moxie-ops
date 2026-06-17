@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { ChannelChip } from "@/components/shared/channel-chip";
 import { SkuMasterCard, type SkuMasterRow } from "@/components/settings/sku-master-card";
+import { EmailTemplateCard, type EmailTemplate } from "@/components/settings/email-template-card";
 import { formatDateTime, pct } from "@/lib/utils";
 
 interface Channel {
@@ -56,6 +57,7 @@ export function SettingsTabs({
   warehouseEmail,
   spreadsheetId,
   locationRecipients,
+  emailTemplate,
 }: {
   channels: Channel[];
   skus: SkuMasterRow[];
@@ -63,6 +65,7 @@ export function SettingsTabs({
   warehouseEmail: string;
   spreadsheetId: string;
   locationRecipients: LocationRecipientsMap;
+  emailTemplate: EmailTemplate;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState<Channel | null>(null);
@@ -244,33 +247,17 @@ export function SettingsTabs({
               <Label>Dispatch email address</Label>
               <Input defaultValue={warehouseEmail} />
             </div>
-            <div>
-              <Label className="text-xs text-muted-foreground">Email template (read-only)</Label>
-              <pre className="mt-2 overflow-auto rounded-xl border border-border/70 bg-muted/40 p-4 text-xs leading-relaxed text-muted-foreground">
-{`Subject: Dispatch Instruction — PO {poNumber} for {channel} — Due {date}
-
-Dear Warehouse Team,
-Please dispatch the following order:
-
-Channel: {channel}
-PO Number: {poNumber}
-Delivery Address: {address}
-Dispatch By: {date}
-
-PICKING LIST:
-| SKU Code | Product | Quantity | Case Packs |
-| ...      | ...     | ...      | ...        |
-
-Please reply confirming dispatch with AWB number and actual quantities.
-Reference ID: {warehouseInstructionId}`}
-              </pre>
-            </div>
+            <p className="text-xs text-muted-foreground">
+              The dispatch email copy (greeting, intro, signature) is editable under the{" "}
+              <span className="font-medium">Email</span> tab.
+            </p>
           </CardContent>
         </Card>
       </TabsContent>
 
-      {/* Email recipients */}
+      {/* Email template + recipients */}
       <TabsContent value="email" className="space-y-6">
+        <EmailTemplateCard initial={emailTemplate} />
         {DISPATCH_LOCATIONS.map((loc) => (
           <LocationRecipientsCard
             key={loc}

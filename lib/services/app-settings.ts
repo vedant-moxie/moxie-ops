@@ -30,7 +30,23 @@ interface AppSettingsData {
   /** Test-mode email sink: when on, ALL outgoing mail goes only to testEmailAddress. */
   testEmailMode?: boolean;
   testEmailAddress?: string;
+  /** Editable copy for the PO dispatch email (table + bullets stay auto-generated). */
+  emailTemplate?: { greeting?: string; intro?: string; signoff?: string };
 }
+
+/** Editable text of the PO dispatch email. The SKU table + PO bullets are always
+ *  generated; only these surrounding lines are user-editable. */
+export interface EmailTemplate {
+  greeting: string;
+  intro: string;
+  signoff: string;
+}
+
+export const DEFAULT_EMAIL_TEMPLATE: EmailTemplate = {
+  greeting: "Hi Team,",
+  intro: "Please prepare the mention PO:-",
+  signoff: "Regards,\nTeam Moxie",
+};
 
 async function getAppSettings(): Promise<AppSettingsData> {
   const row = await prisma.integrationToken.findUnique({ where: { provider: PROVIDER } });
@@ -140,4 +156,21 @@ export async function getEmailRedirect(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+// ── Editable PO dispatch email template ─────────────────────────────────────
+
+export async function getEmailTemplate(): Promise<EmailTemplate> {
+  const s = await getAppSettings();
+  return { ...DEFAULT_EMAIL_TEMPLATE, ...(s.emailTemplate ?? {}) };
+}
+
+export async function setEmailTemplate(t: EmailTemplate): Promise<void> {
+  await setAppSettings({
+    emailTemplate: {
+      greeting: t.greeting.trim(),
+      intro: t.intro.trim(),
+      signoff: t.signoff.trimEnd(),
+    },
+  });
 }

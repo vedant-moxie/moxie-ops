@@ -2,7 +2,14 @@ import "server-only";
 import nodemailer from "nodemailer";
 import { env, requireEnv } from "@/lib/env";
 import { nextEmailRef, getSeries } from "@/lib/services/email-ref-counter";
-import { getPoEmailRecipients, getEmailRedirect } from "@/lib/services/app-settings";
+import { getPoEmailRecipients, getEmailRedirect, getEmailTemplate, DEFAULT_EMAIL_TEMPLATE, type EmailTemplate } from "@/lib/services/app-settings";
+
+/** Escape HTML and turn newlines into <br> for safe insertion into the email body. */
+function htmlLines(s: string): string {
+  return s
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/\n/g, "<br>");
+}
 
 export interface PoPreparationEmailResult {
   messageId: string;
@@ -34,6 +41,8 @@ export interface PoEmailData {
   to?: string[];
   /** Override CC recipients (skips settings lookup when provided). */
   cc?: string[];
+  /** Editable copy (greeting/intro/signoff). Defaults to the saved template. */
+  template?: EmailTemplate;
 }
 
 function buildHtml(d: PoEmailData): string {
@@ -41,12 +50,13 @@ function buildHtml(d: PoEmailData): string {
   const skuTh = `${thBase}background:#F6E199;`;
   const qtyTh = `${thBase}background:#C6E0B4;`;
   const td = "padding:6px 10px;border:1px solid #ccc;";
+  const t = d.template ?? DEFAULT_EMAIL_TEMPLATE;
   const rows = d.lines
     .map((l) => `<tr><td style="${td}">${l.sku}</td><td style="${td}">${l.qty}</td></tr>`)
     .join("\n");
   return `
-<p>Hi Team,</p>
-<p>Please prepare the mention PO:-</p>
+<p>${htmlLines(t.greeting)}</p>
+<p>${htmlLines(t.intro)}</p>
 <table border="1" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
   <thead>
     <tr>
@@ -64,15 +74,16 @@ function buildHtml(d: PoEmailData): string {
   <li>Channel: ${d.channel}</li>
   <li>Dispatch From: ${d.dispatchFrom}</li>
 </ul>
-<p>--<br>Regards,<br>Rishabh Kumar.</p>
+<p>--<br>${htmlLines(t.signoff)}</p>
 `.trim();
 }
 
 function buildText(d: PoEmailData): string {
+  const t = d.template ?? DEFAULT_EMAIL_TEMPLATE;
   const rows = d.lines.map((l) => `${l.sku} | ${l.qty}`).join("\n");
-  return `Hi Team,
+  return `${t.greeting}
 
-Please prepare the mention PO:-
+${t.intro}
 
 SKU | Qty
 ${rows}
@@ -83,8 +94,7 @@ ${rows}
 - Dispatch From: ${d.dispatchFrom}
 
 --
-Regards,
-Rishabh Kumar.`;
+${t.signoff}`;
 }
 
 export async function sendPoPreparationEmail(data: PoEmailData): Promise<PoPreparationEmailResult> {
@@ -92,6 +102,9 @@ export async function sendPoPreparationEmail(data: PoEmailData): Promise<PoPrepa
 
   const user = env.PO_TEST_EMAIL_SMTP_USER;
   const pass = env.PO_TEST_EMAIL_SMTP_PASS!.replace(/\s+/g, "");
+
+  // Editable copy (greeting/intro/signoff) — caller override else the saved template.
+  if (!data.template) data = { ...data, template: await getEmailTemplate() };
 
   // Resolve recipients: use caller-supplied overrides, otherwise read from settings
   const configured = await getPoEmailRecipients();
