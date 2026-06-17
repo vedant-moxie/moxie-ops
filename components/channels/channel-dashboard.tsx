@@ -10,7 +10,7 @@ import {
 } from "recharts";
 import {
   Package, IndianRupee, Boxes, Store, RefreshCw, Upload, ChevronDown,
-  ChevronRight, FileSpreadsheet, Loader2, Mail, Download, ClipboardList, CheckCircle2,
+  ChevronRight, FileSpreadsheet, Loader2, Mail, Download, ClipboardList, CheckCircle2, SendHorizonal,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,8 +19,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { Checkbox } from "@/components/ui/checkbox";
 import { StatCard } from "@/components/dashboard/summary-stats";
 import { EmptyState } from "@/components/shared/empty-state";
+import { BulkSendModal, type BulkPo } from "@/components/channels/bulk-send-modal";
 import { cn, formatINR, formatNumber, formatDate, relativeTime } from "@/lib/utils";
 import type { ChannelConfig } from "@/lib/channels";
 import type { ChannelInsights } from "@/lib/services/blinkit-analytics";
@@ -470,7 +472,10 @@ export function ChannelDashboard({
 }
 
 function PoTable({ rows }: { rows: ChannelInsights["pos"] }) {
+  const router = useRouter();
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
   function toggle(id: string) {
     setOpen((prev) => {
       const n = new Set(prev);
@@ -478,10 +483,44 @@ function PoTable({ rows }: { rows: ChannelInsights["pos"] }) {
       return n;
     });
   }
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  }
+  // Only un-allocated POs are selectable for bulk allocate & send.
+  const selectable = rows.filter((p) => !ALLOCATED_OR_BEYOND.has(p.status));
+  const allSelected = selectable.length > 0 && selectable.every((p) => selected.has(p.id));
+  function toggleAll() {
+    setSelected(allSelected ? new Set() : new Set(selectable.map((p) => p.id)));
+  }
+  const selectedPos: BulkPo[] = rows
+    .filter((p) => selected.has(p.id))
+    .map((p) => ({ id: p.id, poNumber: p.poNumber ?? p.id }));
+
   return (
-    <Table>
+    <>
+      {selected.size > 0 && (
+        <div className="mb-3 flex items-center justify-between rounded-lg border border-border/70 bg-muted/40 px-4 py-2.5">
+          <span className="text-sm font-medium">{selected.size} PO{selected.size !== 1 ? "s" : ""} selected</span>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
+            <Button size="sm" onClick={() => setBulkOpen(true)}>
+              <SendHorizonal className="h-4 w-4" /> Review &amp; send ({selected.size})
+            </Button>
+          </div>
+        </div>
+      )}
+      <Table>
       <TableHeader>
         <TableRow className="hover:bg-transparent">
+          <TableHead className="w-8">
+            {selectable.length > 0 && (
+              <Checkbox checked={allSelected} onCheckedChange={toggleAll} aria-label="Select all" />
+            )}
+          </TableHead>
           <TableHead className="w-8" />
           <TableHead>PO Number</TableHead>
           <TableHead>PO Date</TableHead>
@@ -499,6 +538,15 @@ function PoTable({ rows }: { rows: ChannelInsights["pos"] }) {
           return (
             <>
               <TableRow key={po.id} className="cursor-pointer" onClick={() => toggle(po.id)}>
+                <TableCell onClick={(e) => e.stopPropagation()}>
+                  {!ALLOCATED_OR_BEYOND.has(po.status) && (
+                    <Checkbox
+                      checked={selected.has(po.id)}
+                      onCheckedChange={() => toggleSelect(po.id)}
+                      aria-label={`Select ${po.poNumber}`}
+                    />
+                  )}
+                </TableCell>
                 <TableCell>
                   {isOpen ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
                 </TableCell>
@@ -546,7 +594,7 @@ function PoTable({ rows }: { rows: ChannelInsights["pos"] }) {
               </TableRow>
               {isOpen && (
                 <TableRow key={po.id + "-items"} className="hover:bg-transparent">
-                  <TableCell colSpan={9} className="bg-muted/30 p-0">
+                  <TableCell colSpan={10} className="bg-muted/30 p-0">
                     <div className="p-3">
                       <div className="mb-2 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                         SKUs ordered · {po.items.length}
@@ -590,5 +638,15 @@ function PoTable({ rows }: { rows: ChannelInsights["pos"] }) {
         })}
       </TableBody>
     </Table>
+      <BulkSendModal
+        pos={selectedPos}
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        onSent={() => {
+          setSelected(new Set());
+          router.refresh();
+        }}
+      />
+    </>
   );
 }

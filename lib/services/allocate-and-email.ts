@@ -54,11 +54,11 @@ function extractRaw(obj: unknown, keys: string[]): string {
 // Location/WH for the email — the precise dock/warehouse code, tried in priority
 // order (NOT first-key-wins like extractRaw): Zepto `location`="MUM-DRY-MH3",
 // Nykaa `location`="KOL". Falls back to facility/outlet/city if those are absent.
-const LOCATION_PRIORITY = [
+export const LOCATION_PRIORITY = [
   "location", "locationcode", "dcname", "dc", "facilityname", "facility_name",
   "facility", "warehouse", "store", "outlet", "destination", "locationname", "city",
 ];
-function pickByPriority(obj: unknown, orderedKeys: string[]): string {
+export function pickByPriority(obj: unknown, orderedKeys: string[]): string {
   if (!obj || typeof obj !== "object") return "—";
   const data = obj as Record<string, unknown>;
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");

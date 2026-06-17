@@ -45,7 +45,7 @@ export interface PoEmailData {
   template?: EmailTemplate;
 }
 
-function buildHtml(d: PoEmailData): string {
+export function buildHtml(d: PoEmailData): string {
   const thBase = "padding:6px 10px;border:1px solid #ccc;";
   const skuTh = `${thBase}background:#F6E199;`;
   const qtyTh = `${thBase}background:#C6E0B4;`;
