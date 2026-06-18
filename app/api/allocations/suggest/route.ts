@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { ok, handler } from "@/lib/api";
 import { requireAuth } from "@/lib/auth";
-import { readLiveAtp } from "@/lib/integrations/sheets";
+import { readLiveAtp } from "@/lib/integrations/wms-atp";
 import { suggestAllocations } from "@/lib/integrations/claude";
 import { roundToCasePack } from "@/lib/utils";
 

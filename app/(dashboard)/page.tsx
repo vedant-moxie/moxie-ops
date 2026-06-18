@@ -7,8 +7,7 @@ import { StatCard } from "@/components/dashboard/summary-stats";
 import { PoTable } from "@/components/dashboard/po-table";
 import { AtpSidebar } from "@/components/dashboard/atp-sidebar";
 import { getDashboardData } from "@/lib/data/queries";
-import { readLiveAtp } from "@/lib/integrations/sheets";
-import { prisma } from "@/lib/db";
+import { getLiveAtp } from "@/lib/services/live-atp";
 import { formatINR } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -30,18 +29,7 @@ export default function DashboardPage() {
 }
 
 async function DashboardContent() {
-  const [data, atp, demandRows] = await Promise.all([
-    getDashboardData(),
-    readLiveAtp(),
-    prisma.poLineItem.groupBy({
-      by: ["skuId"],
-      where: { po: { status: { in: ["PENDING_REVIEW", "PRIORITISED", "ALLOCATED"] } } },
-      _sum: { requestedQty: true },
-    }),
-  ]);
-
-  const demand: Record<string, number> = {};
-  for (const r of demandRows) demand[r.skuId] = r._sum.requestedQty ?? 0;
+  const [data, atp] = await Promise.all([getDashboardData(), getLiveAtp()]);
 
   const { summary } = data;
   const delta = summary.todayCount - summary.yesterdayCount;
@@ -90,7 +78,7 @@ async function DashboardContent() {
         </Card>
 
         <div className="hidden xl:block">
-          <AtpSidebar initial={atp} demand={demand} />
+          <AtpSidebar initial={atp} />
         </div>
       </div>
     </div>

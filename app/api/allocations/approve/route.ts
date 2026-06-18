@@ -6,7 +6,7 @@ import { ok, handler } from "@/lib/api";
 import { currentActor } from "@/lib/auth";
 import { writeAudit } from "@/lib/services/audit";
 import { sendEmail, warehouseInstructionEmail } from "@/lib/integrations/resend";
-import { invalidateAtpCache } from "@/lib/integrations/sheets";
+import { invalidateAtpCache } from "@/lib/integrations/wms-atp";
 import { roundToCasePack, formatDate } from "@/lib/utils";
 import { getPoDocuments, extractGstinFromPdf } from "@/lib/services/po-documents";
 import { resolveDispatchFromGstins } from "@/lib/services/po-documents-helpers";

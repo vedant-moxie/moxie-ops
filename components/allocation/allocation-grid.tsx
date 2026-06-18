@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PriorityBadge } from "@/components/dashboard/priority-badge";
 import { cn, formatINR, formatNumber, roundToCasePack } from "@/lib/utils";
-import type { AtpRow } from "@/lib/integrations/sheets";
+import type { AtpRow } from "@/lib/integrations/wms-atp";
 
 interface SkuMeta {
   skuId: string;
