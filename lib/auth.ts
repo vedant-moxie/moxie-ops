@@ -1,5 +1,8 @@
 import "server-only";
+import { cookies } from "next/headers";
 import { env } from "@/lib/env";
+import { googleAuthConfigured } from "@/lib/auth/google";
+import { SESSION_COOKIE, verifySession } from "@/lib/auth/session";
 
 const clerkConfigured =
   !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY &&
@@ -27,10 +30,24 @@ function emailIsAdmin(email: string | null): boolean {
 
 /**
  * Resolve the current actor for API routes / server components.
- * When Clerk is configured, enforce auth and return a readable identity + admin flag.
- * When it isn't (local/demo), return a stub treated as admin so the app stays usable.
+ * Provider precedence: Google OAuth (signed session cookie) → Clerk → demo.
+ * When no provider is configured (local/demo), return a stub treated as admin so
+ * the app stays usable.
  */
 export async function currentActor(): Promise<Actor> {
+  // Google OAuth: identity comes from the MOXIE_SECRET_KEY-signed session cookie.
+  if (googleAuthConfigured()) {
+    const jar = await cookies();
+    const session = verifySession(jar.get(SESSION_COOKIE)?.value);
+    if (!session) throw new Error("Unauthorized");
+    return {
+      id: session.sub,
+      label: session.name || session.email,
+      email: session.email,
+      isAdmin: emailIsAdmin(session.email),
+    };
+  }
+
   if (!clerkConfigured) {
     // Demo/local boot has no real identity — allow edits for convenience.
     return { id: "demo-user", label: "Ops (demo)", email: null, isAdmin: true };

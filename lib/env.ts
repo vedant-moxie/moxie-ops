@@ -19,6 +19,19 @@ const schema = z.object({
   // Comma-separated emails allowed to edit admin-gated config (e.g. SKU master)
   ADMIN_EMAILS: z.string().default("amritya@moxiebeauty.in"),
 
+  // Google OAuth sign-in (custom flow). When all four are set, Google sign-in
+  // takes over from Clerk. The redirect URI must exactly match the Google Console
+  // entry and end in /auth/google/callback.
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_REDIRECT_URI: z.string().optional(),
+  // HMAC key signing the session cookie. Keep stable across restarts; rotating it
+  // invalidates all sessions. Required when Google OAuth is enabled.
+  MOXIE_SECRET_KEY: z.string().optional(),
+  // Comma-separated email domains allowed to sign in via Google. Empty = any
+  // Google account (not recommended for a publicly reachable URL).
+  ALLOWED_EMAIL_DOMAINS: z.string().default("moxiebeauty.in"),
+
   // Anthropic
   ANTHROPIC_API_KEY: z.string().optional(),
 

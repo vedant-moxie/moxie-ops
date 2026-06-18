@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { LogOut } from "lucide-react";
 import { Logo } from "./logo";
 import { NAV_ITEMS, SETTINGS_ITEM, type NavItem } from "./nav-config";
 import { cn } from "@/lib/utils";
@@ -82,7 +83,7 @@ export function Sidebar({ counts, user }: SidebarProps) {
         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-sidebar-accent text-sm font-bold text-[hsl(40_18%_10%)]">
           {user.label.slice(0, 1).toUpperCase()}
         </span>
-        <div className="min-w-0 leading-tight">
+        <div className="min-w-0 flex-1 leading-tight">
           <div className="truncate text-sm font-medium text-sidebar-foreground">
             {user.label}
           </div>
@@ -90,6 +91,16 @@ export function Sidebar({ counts, user }: SidebarProps) {
             <div className="truncate text-xs text-sidebar-muted">{user.email}</div>
           )}
         </div>
+        {user.email && (
+          <a
+            href="/auth/logout"
+            title="Sign out"
+            aria-label="Sign out"
+            className="shrink-0 rounded-lg p-1.5 text-sidebar-foreground/70 transition-colors hover:bg-white/10 hover:text-sidebar-foreground"
+          >
+            <LogOut className="h-4 w-4" />
+          </a>
+        )}
       </div>
     </aside>
   );

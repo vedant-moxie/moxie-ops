@@ -11,11 +11,11 @@ export default async function DashboardLayout({
   children: React.ReactNode;
 }) {
   let counts = { pendingPos: 0, openDiscrepancies: 0 };
-  let user = { label: "Ops" };
+  let user: { label: string; email?: string } = { label: "Ops" };
   try {
     [counts, user] = await Promise.all([
       getNavCounts(),
-      currentActor().then((a) => ({ label: a.label })),
+      currentActor().then((a) => ({ label: a.label, email: a.email ?? undefined })),
     ]);
   } catch {
     // DB unreachable (first boot before migrate) — render shell with zeros.
