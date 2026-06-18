@@ -2,6 +2,7 @@ import { Percent, Target, ShieldCheck, Package } from "lucide-react";
 import { Topbar } from "@/components/layout/topbar";
 import { StatCard } from "@/components/dashboard/summary-stats";
 import { AnalyticsCharts } from "@/components/analytics/charts";
+import { AnalyticsAutoRefresh } from "@/components/analytics/auto-refresh";
 import { InventoryCoverTable } from "@/components/analytics/inventory-cover-table";
 import { computeKpis } from "@/lib/services/analytics";
 import { computeInventoryCover } from "@/lib/services/inventory-cover";
@@ -17,6 +18,10 @@ export default async function AnalyticsPage() {
     <>
       <Topbar title="Analytics" subtitle="Operational KPIs · last 30 days" />
       <main className="flex-1 space-y-6 px-5 py-6 lg:px-8">
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-muted-foreground">Auto-refreshes every 60s · IST</p>
+          <AnalyticsAutoRefresh />
+        </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard label="Gross fill rate" value={pct(kpis.summary.grossFillRate)} icon={Percent} accent="lime" />
           <StatCard label="Net fill rate" value={net != null ? pct(net) : "—"} icon={Target} accent="mint" />

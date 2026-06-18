@@ -25,10 +25,18 @@ function shortDate(d: string) {
   return new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
 }
 
+function ChartEmpty({ message }: { message: string }) {
+  return (
+    <div className="flex h-[260px] items-center justify-center text-center text-sm text-muted-foreground">
+      {message}
+    </div>
+  );
+}
+
 export interface KpiData {
   fillRateByChannel: { channel: string; gross: number; net: number | null }[];
   fillRateTrend: { date: string; gross: number | null }[];
-  dispatchTat: { date: string; hours: number }[];
+  dispatchTat: { date: string; hours: number | null }[];
   grnAcceptance: { name: string; value: number }[];
   orderVolume: { date: string; count: number }[];
 }
@@ -36,11 +44,20 @@ export interface KpiData {
 export function AnalyticsCharts({ data }: { data: KpiData }) {
   const donutColors = [SUCCESS, RED, "#7c6df0"];
 
+  const hasChannelFill = data.fillRateByChannel.length > 0;
+  const hasFillTrend = data.fillRateTrend.some((d) => d.gross != null);
+  const hasTat = data.dispatchTat.some((d) => d.hours != null);
+  const hasGrn = data.grnAcceptance.some((g) => g.value > 0);
+  const hasVolume = data.orderVolume.some((d) => d.count > 0);
+
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <Card>
         <CardHeader><CardTitle className="text-base">Fill rate by channel · gross vs net</CardTitle></CardHeader>
         <CardContent>
+          {!hasChannelFill ? (
+            <ChartEmpty message="No delivered POs in the last 30 days." />
+          ) : (
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={data.fillRateByChannel} margin={{ left: -16 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#eee7d6" vertical={false} />
@@ -55,6 +72,7 @@ export function AnalyticsCharts({ data }: { data: KpiData }) {
               <Bar name="Net" dataKey="net" fill={INK} radius={[8, 8, 0, 0]} maxBarSize={36} />
             </BarChart>
           </ResponsiveContainer>
+          )}
           <div className="mt-2 flex justify-center gap-4 text-xs text-muted-foreground">
             <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ background: LIME }} /> Gross (delivered ÷ ordered)</span>
             <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ background: INK }} /> Net (delivered ÷ assigned)</span>
@@ -65,6 +83,9 @@ export function AnalyticsCharts({ data }: { data: KpiData }) {
       <Card>
         <CardHeader><CardTitle className="text-base">Gross fill-rate trend (30 days)</CardTitle></CardHeader>
         <CardContent>
+          {!hasFillTrend ? (
+            <ChartEmpty message="No GRNs received in the last 30 days." />
+          ) : (
           <ResponsiveContainer width="100%" height={260}>
             <LineChart data={data.fillRateTrend} margin={{ left: -16 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#eee7d6" vertical={false} />
@@ -74,27 +95,36 @@ export function AnalyticsCharts({ data }: { data: KpiData }) {
               <Line type="monotone" dataKey="gross" stroke={SUCCESS} strokeWidth={2.5} dot={{ r: 2, fill: SUCCESS }} activeDot={{ r: 5 }} connectNulls />
             </LineChart>
           </ResponsiveContainer>
+          )}
         </CardContent>
       </Card>
 
       <Card>
-        <CardHeader><CardTitle className="text-base">Dispatch TAT (hours)</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">Dispatch TAT · approval → dispatch/receipt</CardTitle></CardHeader>
         <CardContent>
+          {!hasTat ? (
+            <ChartEmpty message="No approved POs with a dispatch or GRN event in the last 30 days." />
+          ) : (
           <ResponsiveContainer width="100%" height={260}>
             <LineChart data={data.dispatchTat} margin={{ left: -16 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#eee7d6" vertical={false} />
-              <XAxis dataKey="date" tickFormatter={shortDate} tick={axis} axisLine={false} tickLine={false} />
+              <XAxis dataKey="date" tickFormatter={shortDate} tick={axis} axisLine={false} tickLine={false} minTickGap={28} />
               <YAxis tick={axis} axisLine={false} tickLine={false} unit="h" />
-              <Tooltip contentStyle={tooltipStyle} labelFormatter={shortDate} formatter={(v) => [`${v}h`, "Avg TAT"]} />
-              <Line type="monotone" dataKey="hours" stroke={INK} strokeWidth={2.5} dot={{ r: 3, fill: LIME }} activeDot={{ r: 5 }} />
+              <Tooltip contentStyle={tooltipStyle} labelFormatter={shortDate} formatter={(v) => [v == null ? "—" : `${v}h`, "Avg TAT"]} />
+              <Line type="monotone" dataKey="hours" stroke={INK} strokeWidth={2.5} dot={{ r: 3, fill: LIME }} activeDot={{ r: 5 }} connectNulls />
             </LineChart>
           </ResponsiveContainer>
+          )}
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader><CardTitle className="text-base">GRN acceptance</CardTitle></CardHeader>
         <CardContent>
+          {!hasGrn ? (
+            <ChartEmpty message="No GRNs received in the last 30 days." />
+          ) : (
+          <>
           <ResponsiveContainer width="100%" height={260}>
             <PieChart>
               <Pie
@@ -120,12 +150,17 @@ export function AnalyticsCharts({ data }: { data: KpiData }) {
               </span>
             ))}
           </div>
+          </>
+          )}
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader><CardTitle className="text-base">Order volume (30 days)</CardTitle></CardHeader>
         <CardContent>
+          {!hasVolume ? (
+            <ChartEmpty message="No POs ingested in the last 30 days." />
+          ) : (
           <ResponsiveContainer width="100%" height={260}>
             <AreaChart data={data.orderVolume} margin={{ left: -16 }}>
               <defs>
@@ -141,6 +176,7 @@ export function AnalyticsCharts({ data }: { data: KpiData }) {
               <Area type="monotone" dataKey="count" stroke={MINT} strokeWidth={2} fill="url(#vol)" />
             </AreaChart>
           </ResponsiveContainer>
+          )}
         </CardContent>
       </Card>
     </div>

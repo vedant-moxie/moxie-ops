@@ -3,7 +3,9 @@ import { prisma } from "@/lib/db";
 import { computeFillRates } from "@/lib/services/fill-rate";
 
 const DAY = 86_400_000;
-const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+const IST_OFFSET_MS = 5.5 * 3_600_000; // ops run in IST — bucket calendar days by IST, not UTC
+/** Calendar date (YYYY-MM-DD) in IST for a given instant. */
+const dayKey = (d: Date) => new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
 const pct1 = (num: number, den: number): number | null =>
   den > 0 ? Math.round((num / den) * 1000) / 10 : null;
 
@@ -19,7 +21,8 @@ export interface Kpis {
   fillRateByChannel: { channel: string; gross: number; net: number | null }[];
   /** Daily gross fill from GRNs received that day (last 30d). */
   fillRateTrend: { date: string; gross: number | null }[];
-  dispatchTat: { date: string; hours: number }[];
+  /** Avg approval→dispatch (or →GRN-receipt when no dispatch event) per IST day; null where none. */
+  dispatchTat: { date: string; hours: number | null }[];
   grnAcceptance: { name: string; value: number }[];
   orderVolume: { date: string; count: number }[];
 }
@@ -94,21 +97,31 @@ export async function computeKpis(): Promise<Kpis> {
     fillRateTrend.push({ date: k, gross: t ? pct1(t.num, t.den) : null });
   }
 
-  // 3. Dispatch TAT by day (approval → dispatch).
+  // 3. Dispatch TAT by day: approval → dispatch when a dispatch event exists,
+  //    else approval → GRN-received (most quick-commerce POs never email a
+  //    dispatch confirmation). Bucketed on the end event's IST day.
   const tatByDay = new Map<string, number[]>();
   for (const po of pos) {
-    if (po.approvedAt && po.dispatchRecord?.dispatchedAt) {
-      const hours = (po.dispatchRecord.dispatchedAt.getTime() - po.approvedAt.getTime()) / 3_600_000;
-      if (hours >= 0) {
-        const k = dayKey(po.dispatchRecord.dispatchedAt);
-        (tatByDay.get(k) ?? tatByDay.set(k, []).get(k)!).push(hours);
-      }
-    }
+    if (!po.approvedAt) continue;
+    const end = po.dispatchRecord?.dispatchedAt ?? po.grnRecord?.receivedAt ?? null;
+    if (!end) continue;
+    const hours = (end.getTime() - po.approvedAt.getTime()) / 3_600_000;
+    if (hours < 0) continue;
+    const k = dayKey(end);
+    const arr = tatByDay.get(k) ?? [];
+    arr.push(hours);
+    tatByDay.set(k, arr);
   }
-  const dispatchTat = [...tatByDay.entries()].sort().map(([date, hrs]) => ({
-    date,
-    hours: Math.round((hrs.reduce((s, h) => s + h, 0) / hrs.length) * 10) / 10,
-  }));
+  // One point per day in the window (null where no TAT samples that day).
+  const dispatchTat: { date: string; hours: number | null }[] = [];
+  for (let i = 29; i >= 0; i--) {
+    const k = dayKey(new Date(now - i * DAY));
+    const hrs = tatByDay.get(k);
+    dispatchTat.push({
+      date: k,
+      hours: hrs ? Math.round((hrs.reduce((s, h) => s + h, 0) / hrs.length) * 10) / 10 : null,
+    });
+  }
 
   // 4. GRN acceptance
   let autoAccepted = 0, flagged = 0, resolved = 0;
@@ -151,9 +164,11 @@ export async function computeKpis(): Promise<Kpis> {
   const grnTotal = autoAccepted + flagged + resolved;
   const acceptanceRate = grnTotal ? Math.round(((autoAccepted + resolved) / grnTotal) * 1000) / 10 : 0;
 
-  const startOfMonth = new Date();
-  startOfMonth.setDate(1);
-  startOfMonth.setHours(0, 0, 0, 0);
+  // Start of the current month at IST midnight, expressed as a UTC instant.
+  const istNow = new Date(now + IST_OFFSET_MS);
+  const startOfMonth = new Date(
+    Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), 1) - IST_OFFSET_MS,
+  );
   const ordersThisMonth = await prisma.purchaseOrder.count({ where: { createdAt: { gte: startOfMonth } } });
 
   return {
