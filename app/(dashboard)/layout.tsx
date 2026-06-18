@@ -1,7 +1,11 @@
+import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import { Sidebar } from "@/components/layout/sidebar";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { getNavCounts } from "@/lib/data/queries";
 import { currentActor } from "@/lib/auth";
+import { googleAuthConfigured } from "@/lib/auth/google";
+import { SESSION_COOKIE, verifySession } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +14,15 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
+  // Authoritative auth gate (Node runtime — reads env at runtime, unlike Edge
+  // middleware which inlines env at build time and is a no-op when the OAuth vars
+  // aren't present in the build). Must run BEFORE the try/catch: redirect() throws
+  // a control-flow signal that the catch would otherwise swallow.
+  if (googleAuthConfigured()) {
+    const jar = await cookies();
+    if (!verifySession(jar.get(SESSION_COOKIE)?.value)) redirect("/sign-in");
+  }
+
   let counts = { pendingPos: 0, openDiscrepancies: 0 };
   let user: { label: string; email?: string } = { label: "Ops" };
   try {

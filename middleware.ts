@@ -7,6 +7,13 @@ import { NextResponse, type NextRequest, type NextFetchEvent } from "next/server
  *
  * Provider precedence: Google OAuth → Clerk → no-op (local/demo boot, so the full
  * UI is browsable without any auth provider configured).
+ *
+ * NOTE: middleware runs on the Edge runtime, which inlines process.env at BUILD
+ * time. When the OAuth vars aren't present in the build (e.g. secrets injected
+ * only at runtime), `googleConfigured` is baked false and this guard no-ops — so
+ * it's best-effort UX only. The authoritative gate is the Node-runtime check in
+ * app/(dashboard)/layout.tsx (pages) and requireAuth() in API routes, both of
+ * which read env at runtime.
  */
 const isPublicRoute = createRouteMatcher([
   "/sign-in(.*)",
