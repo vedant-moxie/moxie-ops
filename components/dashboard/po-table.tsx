@@ -10,6 +10,7 @@ import {
 import { SelectItem } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { ChannelChip } from "@/components/shared/channel-chip";
+import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { PriorityBadge } from "@/components/dashboard/priority-badge";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -36,6 +37,7 @@ export interface PoRow {
   poDate: Date | string | null;
   createdAt: Date | string;
   emailRef?: string | null;
+  emailStatus?: string | null;
   channel: { id: string; name: string; logoColor: string | null; tier: string };
   _count: { lineItems: number };
 }
@@ -194,6 +196,13 @@ export function PoTable({
                 </TableCell>
                 <TableCell>
                   <StatusBadge status={po.status} />
+                  {(po.emailStatus === "HELD" || po.emailStatus === "FAILED") && (
+                    <div className="mt-0.5">
+                      <Badge variant={po.emailStatus === "HELD" ? "warning" : "danger"} title={po.emailStatus === "HELD" ? "Email reached no one — open the PO to fix recipients & resend" : "Email send failed — open the PO to resend"}>
+                        Email not delivered
+                      </Badge>
+                    </div>
+                  )}
                   {po.emailRef && (
                     <div className="mt-0.5 font-mono text-[11px] text-muted-foreground" title="PO-preparation email reference">
                       {po.emailRef}

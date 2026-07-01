@@ -1,7 +1,6 @@
 import "server-only";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { env } from "@/lib/env";
 import defaultLocationRecipients from "@/data/location-recipients.json";
 
 const PROVIDER = "app_settings";
@@ -67,13 +66,17 @@ async function setAppSettings(patch: Partial<AppSettingsData>): Promise<void> {
 
 // ── Global PO email recipients (op-39) — used as the fallback ───────────────
 
+/**
+ * Global PO email recipients — the operator-configured fallback used only when a PO's
+ * dispatch location doesn't resolve to a per-location list. Returns EXACTLY what is
+ * configured (empty when unset). Never injects a personal/test inbox: an empty result
+ * means "no recipients", and the caller must withhold + flag the email rather than
+ * misroute it to a developer address. (This is the fix for the undelivered-PO bug where
+ * unresolved locations silently fell back to PO_TEST_EMAIL_TO.)
+ */
 export async function getPoEmailRecipients(): Promise<{ to: string[]; cc: string[] }> {
   const settings = await getAppSettings();
-  const to =
-    settings.poEmailTo && settings.poEmailTo.length > 0
-      ? settings.poEmailTo
-      : [env.PO_TEST_EMAIL_TO];
-  return { to, cc: settings.poEmailCc ?? [] };
+  return { to: settings.poEmailTo ?? [], cc: settings.poEmailCc ?? [] };
 }
 
 export async function setPoEmailRecipients(to: string[], cc: string[]): Promise<void> {

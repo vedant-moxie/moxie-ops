@@ -9,6 +9,7 @@ import { Separator } from "@/components/ui/separator";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { PriorityBadge } from "@/components/dashboard/priority-badge";
 import { ChannelChip } from "@/components/shared/channel-chip";
+import { ResendEmailModal } from "@/components/orders/resend-email-modal";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -119,16 +120,38 @@ export default async function OrderDetailPage({ params }: { params: { id: string
               <div>
                 <div className="text-xs text-muted-foreground">Email reference</div>
                 <div className="font-medium font-mono">{po.emailRef}</div>
-                {po.emailSentAt && (
-                  <div className="text-[11px] text-muted-foreground">sent {formatDate(po.emailSentAt)}</div>
-                )}
+                <div className="mt-0.5"><EmailStatusBadge status={po.emailStatus} sentAt={po.emailSentAt} /></div>
               </div>
             )}
             <div className="ml-auto flex flex-wrap gap-2">
+              {(po.emailStatus === "HELD" || po.emailStatus === "FAILED") && (
+                <ResendEmailModal poId={po.id} buttonLabel="Fix recipients & resend" />
+              )}
+              {po.emailStatus === "SENT" && (
+                <ResendEmailModal poId={po.id} buttonLabel="Resend email" buttonVariant="outline" />
+              )}
               <ContextActions status={po.status} poId={po.id} hasGrn={isReceived} />
             </div>
           </CardContent>
         </Card>
+
+        {/* Undelivered email banner — the PO allocated but its email reached no one. */}
+        {(po.emailStatus === "HELD" || po.emailStatus === "FAILED") && (
+          <Card className="mb-6 border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/30">
+            <CardContent className="flex flex-wrap items-center gap-3 p-4">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <div className="text-sm text-amber-800 dark:text-amber-300">
+                <span className="font-semibold">
+                  Email not delivered {po.emailRef ? <span className="font-mono">({po.emailRef})</span> : null}.
+                </span>{" "}
+                {po.emailHoldReason ?? "This PO's email reached no one."} Add recipients and resend — it keeps the same reference.
+              </div>
+              <div className="ml-auto">
+                <ResendEmailModal poId={po.id} buttonLabel="Fix recipients & resend" />
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <div className="space-y-6">
           {/* Combined line items + GRN table */}
@@ -275,6 +298,24 @@ export default async function OrderDetailPage({ params }: { params: { id: string
       </main>
     </>
   );
+}
+
+/** Delivery state of the PO-preparation email (mirrors PurchaseOrder.emailStatus). */
+function EmailStatusBadge({ status, sentAt }: { status: string; sentAt: Date | null }) {
+  switch (status) {
+    case "SENT":
+      return (
+        <span className="text-[11px] text-muted-foreground">
+          sent{sentAt ? ` ${formatDate(sentAt)}` : ""}
+        </span>
+      );
+    case "HELD":
+      return <Badge variant="warning">Not delivered — needs resend</Badge>;
+    case "FAILED":
+      return <Badge variant="danger">Send failed — needs resend</Badge>;
+    default:
+      return <span className="text-[11px] text-muted-foreground">not sent</span>;
+  }
 }
 
 function Row({ k, v }: { k: string; v: string }) {

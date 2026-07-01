@@ -56,6 +56,9 @@ async function renderPreview(poId: string, overrides: PreviewOverrides) {
       source: true,
       rawData: true,
       status: true,
+      emailRef: true,
+      emailStatus: true,
+      emailHoldReason: true,
       channel: { select: { name: true } },
       lineItems: {
         select: {
@@ -120,6 +123,8 @@ async function renderPreview(poId: string, overrides: PreviewOverrides) {
     }
   }
   if (to.length === 0) {
+    // Configured global recipients ONLY — never a personal/test inbox. Empty here means
+    // the email would reach no one, which the UI flags for a recipient fix.
     const g = await getPoEmailRecipients();
     to = g.to;
     cc = g.cc;
@@ -138,19 +143,28 @@ async function renderPreview(poId: string, overrides: PreviewOverrides) {
   const series = await getSeries();
   const redirect = await getEmailRedirect();
 
+  // Subject defaults to the PO's reference: reuse the stored ref (already sent/held/
+  // failed) so a resend keeps the same number, else peek the next series number.
+  const refPreview = po.emailRef ?? `${series.prefix}${series.nextFormatted}`;
+  const finalTo = redirect ? [redirect] : to;
+
   return ok({
     poNumber: po.channelPoNumber ?? poId,
     channel: po.channel.name,
     status: po.status,
     location,
     dispatchFrom,
-    // The subject defaults to this PO's reference number. refPreview is the next number
-    // that will be issued (per-PO distinct at send) — shown so the operator sees the
-    // default subject and can override it.
-    refPreview: `${series.prefix}${series.nextFormatted}`,
-    to: redirect ? [redirect] : to,
+    refPreview,
+    emailRef: po.emailRef,
+    emailStatus: po.emailStatus,
+    emailHoldReason: po.emailHoldReason,
+    to: finalTo,
     cc: redirect ? [] : cc,
     testMode: !!redirect,
+    // True when this PO would reach nobody (no location/global recipients) — the UI
+    // shows the "reached no one, add recipients & resend" banner. Test mode always has
+    // the redirect recipient, so it's never "no one".
+    willReachNoOne: !redirect && finalTo.length === 0,
     lineCount: lines.length,
     html,
   });

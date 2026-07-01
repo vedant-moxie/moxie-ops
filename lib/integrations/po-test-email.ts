@@ -181,10 +181,18 @@ export async function sendPoPreparationEmail(data: PoEmailData): Promise<PoPrepa
   // Editable copy (subject/greeting/intro/signoff) — caller override else the saved template.
   if (!data.template) data = { ...data, template: await getEmailTemplate() };
 
-  // Resolve recipients: use caller-supplied overrides, otherwise read from settings
+  // Resolve recipients: use caller-supplied overrides, otherwise read from settings.
   const configured = await getPoEmailRecipients();
   const toList = data.to && data.to.length > 0 ? data.to : configured.to;
   const ccList = data.cc !== undefined ? data.cc : configured.cc;
+
+  // Never send to nobody. Callers (buildAndSendPoEmail) withhold + flag before reaching
+  // here; this is a hard backstop so a PO email can never silently misroute to a
+  // fallback/personal inbox again.
+  if (toList.length === 0) {
+    throw new Error("NO_RECIPIENTS: refusing to send a PO email with no To recipients");
+  }
+
   let toStr = toList.join(", ");
   let ccStr = ccList.join(", ");
 

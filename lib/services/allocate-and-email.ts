@@ -8,7 +8,8 @@ import { resolveDispatchFromGstins } from "@/lib/services/po-documents-helpers";
 import { resolveLineInternalSku, eanFromRaw, pvIdFromRaw } from "@/lib/services/sku-resolver";
 import { mapEansToInternal } from "@/lib/services/sku-ean-resolver";
 import { ensureSkuMasterFresh } from "@/lib/services/sku-master";
-import { getLocationRecipients } from "@/lib/services/app-settings";
+import { getLocationRecipients, getPoEmailRecipients } from "@/lib/services/app-settings";
+import { nextEmailRef } from "@/lib/services/email-ref-counter";
 import { validatePoTaxables } from "@/lib/services/taxable-validation";
 import { claimPo, PoClaimedError } from "@/lib/services/po-claim";
 import { wmsConfigured, pushSalesOrder } from "@/lib/integrations/wms";
@@ -109,6 +110,11 @@ export interface AllocateResult {
   emailError?: string;
   /** The reference issued for this PO's prep email (stored on the PO). */
   emailRef?: string | null;
+  /** True when the allocation saved but the email reached no one (no recipients) — the
+   *  PO is flagged HELD and awaits a recipient fix + resend from the preview. */
+  heldNoRecipients?: boolean;
+  /** Why the email was held (shown in the resend preview banner). */
+  emailHoldReason?: string;
 }
 
 /** Operator-edited email fields from the review/preview step. */
@@ -118,6 +124,11 @@ export interface PoEmailOverrides {
   subject?: string;
   /** Reuse this reference verbatim instead of issuing a new one (resend). */
   presetRef?: string;
+  /** Operator-edited To recipients (plain emails). Overrides location/global resolution
+   *  — used by the resend-from-preview flow to fix an undelivered PO's recipients. */
+  to?: string[];
+  /** Operator-edited Cc recipients (plain emails). */
+  cc?: string[];
 }
 
 export interface PoEmailSendResult {
@@ -127,6 +138,11 @@ export interface PoEmailSendResult {
   emailRef?: string | null;
   mismatchWithheld?: boolean;
   mismatches?: { sku: string; channelSkuCode: string | null; expected: number | null; actual: number | null; reason: string }[];
+  /** True when the email was withheld because no recipients resolved — the PO is
+   *  flagged (emailStatus=HELD) and awaits a recipient fix + resend, never misrouted. */
+  heldNoRecipients?: boolean;
+  /** Reason text when heldNoRecipients (shown in the resend preview banner). */
+  emailHoldReason?: string;
 }
 
 export async function allocateAndEmailPo(
@@ -308,6 +324,8 @@ export async function allocateAndEmailPo(
     emailFailed: emailRes.emailFailed,
     emailError: emailRes.emailError,
     emailRef: emailRes.emailRef,
+    heldNoRecipients: emailRes.heldNoRecipients,
+    emailHoldReason: emailRes.emailHoldReason,
   };
 }
 
@@ -375,6 +393,11 @@ export async function buildAndSendPoEmail(
     }
   }
 
+  // The PO's stable email reference — reuse the preset (explicit resend) or the PO's
+  // stored ref, else issue a new one on first attempt. Hoisted so the catch can persist
+  // it against a FAILED send. Kept the same across sent / held / failed / resend.
+  let ref: string | undefined = opts.emailOverrides?.presetRef ?? po.emailRef ?? undefined;
+
   try {
     // Authoritative EAN→internal map (DB) so the email shows our WMS codes even
     // when the channel-code map can't resolve (e.g. Zepto's pvId-based zeptoCode).
@@ -430,16 +453,57 @@ export async function buildAndSendPoEmail(
       console.warn("[allocate-and-email] getPoDocuments failed:", err);
     }
 
-    // Per-dispatch-location recipients; fall back to the global list (handled
-    // inside sendPoPreparationEmail) when the location is unknown/unmapped.
-    let toOverride: string[] | undefined;
-    let ccOverride: string[] | undefined;
-    if (dispatchFrom && dispatchFrom !== "—") {
+    // Resolve recipients, in priority order:
+    //   1. operator-edited recipients from the resend-preview (explicit override)
+    //   2. the PO's dispatch-location list (RGL NCR/BLR/MUM)
+    //   3. the global fallback list — CONFIGURED addresses only (never a personal inbox)
+    // If all three yield nothing, we do NOT send: the email would reach no one, so we
+    // withhold it and flag the PO (emailStatus=HELD) for a recipient fix + resend.
+    let toList: string[] | undefined;
+    let ccList: string[] | undefined;
+    if (opts.emailOverrides?.to && opts.emailOverrides.to.length > 0) {
+      toList = opts.emailOverrides.to;
+      ccList = opts.emailOverrides.cc ?? [];
+    } else if (dispatchFrom && dispatchFrom !== "—") {
       const locRecipients = await getLocationRecipients(dispatchFrom);
       if (locRecipients) {
-        toOverride = locRecipients.to;
-        ccOverride = locRecipients.cc;
+        toList = locRecipients.to;
+        ccList = locRecipients.cc;
       }
+    }
+    if (!toList || toList.length === 0) {
+      const g = await getPoEmailRecipients();
+      if (g.to.length > 0) {
+        toList = g.to;
+        ccList = g.cc;
+      }
+    }
+
+    // Issue the next reference from the series NOW (first attempt only) and keep it
+    // bound to the PO across every outcome (sent / held / failed) so a resend always
+    // carries the same number.
+    if (!ref) ref = (await nextEmailRef()).ref;
+
+    // No recipients anywhere → withhold + flag instead of misrouting. Persist the ref
+    // and the hold reason so the PO surfaces in the UI with a resend-from-preview action.
+    if (!toList || toList.length === 0) {
+      const reason =
+        dispatchFrom && dispatchFrom !== "—"
+          ? `No recipients configured for dispatch location "${dispatchFrom}"`
+          : "Dispatch location could not be resolved and no global recipients are configured";
+      await prisma.purchaseOrder.update({
+        where: { id: poId },
+        data: { emailRef: ref, emailStatus: "HELD", emailHoldReason: reason },
+      }).catch((err) => console.error("[allocate-and-email] failed to persist held state:", err));
+      await writeAudit({
+        entityType: "PurchaseOrder",
+        entityId: poId,
+        action: "EMAIL_WITHHELD_NO_RECIPIENTS",
+        performedBy: actorLabel,
+        changes: { ref, dispatchFrom, reason },
+      }).catch(() => {});
+      console.warn(`[allocate-and-email] email withheld for PO ${poId} [${ref}]: ${reason}`);
+      return { emailMessageId: null, emailFailed: false, heldNoRecipients: true, emailHoldReason: reason, emailRef: ref };
     }
 
     const result = await sendPoPreparationEmail({
@@ -447,8 +511,8 @@ export async function buildAndSendPoEmail(
       channel: po.channel.name,
       location,
       dispatchFrom,
-      to: toOverride,
-      cc: ccOverride,
+      to: toList,
+      cc: ccList,
       lines: po.lineItems
         .map((l) => {
           // Quantities are already persisted (approvedQty). A persisted 0 means the
@@ -469,33 +533,38 @@ export async function buildAndSendPoEmail(
       attachments,
       bodyHtmlOverride: opts.emailOverrides?.bodyHtml,
       subjectOverride: opts.emailOverrides?.subject,
-      // Reuse the explicit ref, else the PO's stored ref (resend), else issue a new one.
-      presetRef: opts.emailOverrides?.presetRef ?? po.emailRef ?? undefined,
+      // Use the ref we resolved + persisted above so sent/held/failed all agree.
+      presetRef: ref,
     });
 
-    // Record the reference + sent time on the PO so it stays visible everywhere.
+    // Delivered → record ref + sent time, clear any prior hold, mark SENT.
     await prisma.purchaseOrder.update({
       where: { id: poId },
-      data: { emailRef: result.ref, emailSentAt: new Date() },
+      data: { emailRef: result.ref, emailSentAt: new Date(), emailStatus: "SENT", emailHoldReason: null },
     }).catch((err) => console.error("[allocate-and-email] failed to persist emailRef:", err));
     await writeAudit({
       entityType: "PurchaseOrder",
       entityId: poId,
       action: "EMAIL_SENT",
       performedBy: actorLabel,
-      changes: { ref: result.ref, messageId: result.messageId, to: result.to },
+      changes: { ref: result.ref, messageId: result.messageId, to: result.to, cc: result.cc },
     }).catch(() => {});
 
     return { emailMessageId: result.messageId, emailFailed: false, emailRef: result.ref };
   } catch (err) {
     const emailError = err instanceof Error ? err.message : String(err);
     console.error(`[allocate-and-email] email send failed for PO ${poId}:`, err);
+    // Persist the ref + FAILED so the PO surfaces for resend and keeps its number.
+    await prisma.purchaseOrder.update({
+      where: { id: poId },
+      data: { emailRef: ref, emailStatus: "FAILED", emailHoldReason: emailError.slice(0, 500) },
+    }).catch((e) => console.error("[allocate-and-email] failed to persist failed state:", e));
     await writeAudit({
       entityType: "PurchaseOrder",
       entityId: poId,
       action: "EMAIL_FAILED",
       performedBy: actorLabel,
-      changes: { error: emailError },
+      changes: { ref, error: emailError },
     }).catch(() => {});
     return { emailMessageId: null, emailFailed: true, emailError };
   }

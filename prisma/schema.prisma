@@ -142,10 +142,19 @@ model PurchaseOrder {
   approvedBy            String?
   approvedAt            DateTime?
   // PO-preparation email reference (e.g. "MB - 26/27 - 1458") issued from the Counter
-  // series at send time, plus when it was sent. Stored so the reference stays visible
-  // against the PO across all allocated views. Null until the prep email is sent.
+  // series on the FIRST send attempt (send, hold, or failure) and reused verbatim on
+  // every resend, so the reference stays bound to the PO. Null until the first attempt.
   emailRef              String?
   emailSentAt           DateTime?
+  // Delivery state of the PO-preparation email so undelivered POs surface for resend
+  // instead of silently misrouting:
+  //   NOT_SENT — no attempt yet
+  //   SENT     — delivered to ≥1 real recipient
+  //   HELD     — withheld because no recipients resolved (needs recipient fix + resend)
+  //   FAILED   — transport failed after retries (needs resend)
+  emailStatus           String    @default("NOT_SENT")
+  // Human-readable reason when emailStatus is HELD/FAILED (shown in the resend preview).
+  emailHoldReason       String?
   // Multi-user allocation lock: who is currently working this PO. Acquired when a
   // user opens it to allocate; released on send / cancel / TTL expiry. The atomic
   // claim check at allocation time is what prevents two people double-allocating.
