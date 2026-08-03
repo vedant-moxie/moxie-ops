@@ -31,6 +31,14 @@
     {
       "path": "/api/cron/wms-stock-sync",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/so-verification",
+      "schedule": "20 4-15 * * *"
+    },
+    {
+      "path": "/api/cron/so-verification?lines=1",
+      "schedule": "30 15 * * *"
     }
   ]
 }

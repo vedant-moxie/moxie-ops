@@ -21,8 +21,14 @@ Chromium included) and brings up Postgres alongside it. The entrypoint runs
 
 ### Environment variables (Coolify → app → Environment Variables)
 Add **everything from `.env.local`** (it's not in the repo by design). At minimum:
-- `CRON_SECRET` — not strictly required here (schedulers are in-process), but set it
-  if you want the `/api/cron/*` routes locked down.
+- `CRON_SECRET` — **REQUIRED.** The image runs with `NODE_ENV=production`, and
+  `validateCron` fails closed there: with no `CRON_SECRET` every `/api/cron/*` route
+  returns `500 {"error":"CRON_SECRET not configured"}`. The in-process schedulers call
+  those same routes over HTTP, so leaving it unset silently breaks *all* background
+  work (channel syncs, WMS stock, SO entry check, email polling). Generate one with
+  `openssl rand -hex 32`. To check a running deployment:
+  `curl -i https://<your-domain>/api/cron/so-verification` — a 500 means it's missing,
+  a 401 means it's set.
 - `NEXT_PUBLIC_APP_URL` — your public URL (e.g. `https://ops.moxiebeauty.in`). The
   schedulers use it to call their own cron endpoints.
 - `RESEND_*`, `PO_TEST_EMAIL_SMTP_*`, `WMS_*`, `TIRA_USER_ID` / `TIRA_PASSWORD`,

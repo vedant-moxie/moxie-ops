@@ -258,6 +258,22 @@ const schema = z.object({
   // Manual overrides for the Outward LOI Report (auto-discovered by name if not set)
   WMS_OUTWARD_REPORT_ID: z.coerce.number().optional(),
   WMS_OUTWARD_REPORT_SP: z.string().optional(),
+  // Sales-order read-back for the SO Entry Check (plan 008). Unset until RGL ships a
+  // salesorder report — the portal engine has none today, so the check stays idle
+  // rather than flagging every PO as MISSING_SO. Name is enough; ID/SP only if the
+  // name lookup misses.
+  WMS_SO_REPORT_NAME: z.string().optional(),
+  WMS_SO_REPORT_ID: z.coerce.number().optional(),
+  WMS_SO_REPORT_SP: z.string().optional(),
+  // Hours after approval before an unpunched PO is flagged MISSING_SO
+  SO_MISSING_SLA_HOURS: z.coerce.number().positive().default(24),
+  // Rolling window of approved POs / fetched SOs the check covers
+  SO_CHECK_WINDOW_DAYS: z.coerce.number().positive().default(30),
+  // Window for the daily line-quantity pass (Outward LOI Report). Kept short because
+  // it is one report per warehouse and the mirror accumulates across runs anyway.
+  SO_LINES_WINDOW_DAYS: z.coerce.number().positive().default(7),
+  SO_CHECK_AUTO: z.string().default("true"), // "false" to disable the background run
+  SO_CHECK_INTERVAL_HOURS: z.coerce.number().positive().default(1),
   // JSON array: [{"code":"W21","name":"Bhiwandi","sheetRange":"W21!A2:D"},...]
   WMS_WAREHOUSES: z.string().optional(),
   // WMS party codes per channel name: {"Blinkit":"25725800003702976","Zepto":"..."}

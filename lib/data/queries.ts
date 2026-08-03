@@ -7,6 +7,8 @@ import { grnPortalUrl } from "@/lib/services/portal-links";
 import { currentActor } from "@/lib/auth";
 import { isClaimedByOther } from "@/lib/services/po-claim";
 import { resolveFields } from "@/lib/integrations/blinkit/fields";
+import { normRef } from "@/lib/services/so-verification-helpers";
+import { soCheckSortRank } from "@/lib/status";
 
 const DAY = 86_400_000;
 
@@ -29,13 +31,22 @@ function resolveFacility(raw: Record<string, string>): string | null {
 
 /** Counts used for sidebar badges. */
 export async function getNavCounts() {
-  const [pendingPos, openDiscrepancies] = await Promise.all([
+  const [pendingPos, openDiscrepancies, openSoChecks] = await Promise.all([
     prisma.purchaseOrder.count({
       where: { status: { in: ["PENDING_REVIEW", "PRIORITISED"] } },
     }),
     prisma.discrepancy.count({ where: { status: { in: ["OPEN", "DISPUTED"] } } }),
+    prisma.soCheck.count({
+      // QTY_UNVERIFIED is a read-path limit, not a warehouse mistake — never badge it.
+      // Closed POs are off this page entirely, so their leftovers never badge either.
+      where: {
+        result: { notIn: ["MATCHED", "QTY_UNVERIFIED"] },
+        resolvedAt: null,
+        po: { status: { not: "CLOSED" } },
+      },
+    }),
   ]);
-  return { pendingPos, openDiscrepancies };
+  return { pendingPos, openDiscrepancies, openSoChecks };
 }
 
 /** Morning-dashboard summary cards + PO list. */
@@ -652,3 +663,172 @@ export async function getInternalShortShip() {
   rows.sort((a, b) => (b.gapValue ?? 0) - (a.gapValue ?? 0));
   return rows;
 }
+
+/**
+ * SO Entry Check page (plan 008): approved POs in the rolling window with the
+ * verdict of the last verification run, the SKU-wise diff, and the SO(s) the
+ * warehouse team actually punched.
+ *
+ * A PO with no SoCheck row is "awaiting punch" — either still inside the missing-SO
+ * SLA or never checked. That's deliberately not a flag.
+ */
+export async function getSoCheckRows(windowDays = 30) {
+  const windowStart = new Date(Date.now() - windowDays * DAY);
+  const pos = await prisma.purchaseOrder.findMany({
+    where: {
+      // CLOSED is excluded on purpose (ops): a delivered, GRN'd, invoiced PO is settled
+      // history and must not show up here. ALLOCATED is included because that is the
+      // status allocate-and-email sets when the warehouse is told to punch.
+      status: { in: ["ALLOCATED", "APPROVED", "DISPATCHED", "DELIVERED", "GRN_RECEIVED", "DISCREPANCY"] },
+      OR: [
+        { emailSentAt: { gte: windowStart } },
+        { emailSentAt: null, approvedAt: { gte: windowStart } },
+        { emailSentAt: null, approvedAt: null, updatedAt: { gte: windowStart } },
+      ],
+    },
+    select: {
+      id: true,
+      channelPoNumber: true,
+      emailRef: true,
+      approvedAt: true,
+      emailSentAt: true,
+      status: true,
+      channel: { select: { name: true, logoColor: true } },
+      soCheck: true,
+      lineItems: {
+        select: { approvedQty: true, unitPrice: true, sku: { select: { internalCode: true, name: true } } },
+      },
+    },
+    orderBy: [{ approvedAt: "desc" }, { updatedAt: "desc" }],
+  });
+
+  const mirrors = pos.length
+    ? await prisma.wmsSalesOrderMirror.findMany({ where: { poId: { in: pos.map((p) => p.id) } } })
+    : [];
+  const mirrorsByPo = new Map<string, typeof mirrors>();
+  for (const m of mirrors) {
+    if (!m.poId) continue;
+    mirrorsByPo.set(m.poId, [...(mirrorsByPo.get(m.poId) ?? []), m]);
+  }
+
+  // Unit price per internal code, so a qty diff can be shown in rupees.
+  const priceBySku = new Map<string, number>();
+  for (const po of pos) {
+    for (const l of po.lineItems) {
+      if (l.unitPrice != null && !priceBySku.has(l.sku.internalCode)) {
+        priceBySku.set(l.sku.internalCode, l.unitPrice);
+      }
+    }
+  }
+
+  const rows = pos.map((po) => {
+    const sos = mirrorsByPo.get(po.id) ?? [];
+    const diff = (po.soCheck?.diff ?? []) as Array<{ skuCode: string; ourQty: number; wmsQty: number }>;
+    const skuNames = new Map(po.lineItems.map((l) => [l.sku.internalCode, l.sku.name]));
+    return {
+      poId: po.id,
+      channel: po.channel,
+      channelPoNumber: po.channelPoNumber,
+      emailRef: po.emailRef,
+      status: po.status,
+      approvedAt: po.approvedAt,
+      emailSentAt: po.emailSentAt,
+      skuCount: po.lineItems.filter((l) => (l.approvedQty ?? 0) > 0).length,
+      ourQty: po.soCheck?.ourQty ?? po.lineItems.reduce((a, l) => a + (l.approvedQty ?? 0), 0),
+      wmsQty: po.soCheck?.wmsQty ?? null,
+      result: po.soCheck?.result ?? null,
+      checkedAt: po.soCheck?.checkedAt ?? null,
+      resolvedAt: po.soCheck?.resolvedAt ?? null,
+      resolvedBy: po.soCheck?.resolvedBy ?? null,
+      note: po.soCheck?.note ?? null,
+      refs: {
+        channelPo: sos.some((s) => matchesRef(s, po.channelPoNumber)),
+        mbRef: sos.some((s) => matchesRef(s, po.emailRef)),
+      },
+      warehouseCode: sos.find((s) => s.warehouseCode)?.warehouseCode ?? null,
+      diff: diff.map((d) => ({
+        ...d,
+        name: skuNames.get(d.skuCode) ?? "",
+        valueImpact:
+          priceBySku.has(d.skuCode)
+            ? Math.round(Math.abs(d.ourQty - d.wmsQty) * priceBySku.get(d.skuCode)! * 100) / 100
+            : null,
+      })),
+      // |qty off| × unit price — what a bad punch puts at risk on this PO.
+      valueAtRisk: diff.reduce(
+        (a, d) => a + Math.abs(d.ourQty - d.wmsQty) * (priceBySku.get(d.skuCode) ?? 0),
+        0,
+      ),
+      // Party as the WMS records it (Customer Name / KPI "customer") — ops asked for
+      // this on the list, since it is how the warehouse identifies a destination.
+      party: sos.find((s) => s.customer)?.customer ?? null,
+      salesOrders: sos.map((s) => ({
+        id: s.wmsSalesOrderId,
+        orderNo: s.orderNo,
+        refNo: s.refNo,
+        partyRefOrderNo: s.partyRefOrderNo,
+        orderDate: s.orderDate,
+        status: s.status,
+        customer: s.customer,
+        warehouseCode: s.warehouseCode,
+        linesKnown: s.linesKnown,
+      })),
+    };
+  });
+
+  // Worst first, newest first within the same verdict — ops works top-down.
+  rows.sort((a, b) => {
+    const d = soCheckSortRank(a.result, !!a.resolvedAt) - soCheckSortRank(b.result, !!b.resolvedAt);
+    if (d !== 0) return d;
+    return (b.approvedAt?.getTime() ?? 0) - (a.approvedAt?.getTime() ?? 0);
+  });
+
+  const lastCheckedAt = rows.reduce<Date | null>(
+    (a, r) => (r.checkedAt && (!a || r.checkedAt > a) ? r.checkedAt : a),
+    null,
+  );
+  return { rows, lastCheckedAt };
+}
+
+/** Does this mirrored SO carry `want` in any of its three reference fields? */
+function matchesRef(
+  so: { orderNo: string | null; refNo: string | null; partyRefOrderNo: string | null },
+  want: string | null,
+): boolean {
+  return !!normRef(want) && [so.orderNo, so.refNo, so.partyRefOrderNo].some((v) => normRef(v) === normRef(want));
+}
+
+export type SoCheckRow = Awaited<ReturnType<typeof getSoCheckRows>>["rows"][number];
+
+/**
+ * Sales orders mirrored from the WMS that no approved PO in the window claimed.
+ *
+ * These are a signal in their own right: an SO whose reference we can't place is one
+ * nobody can trace back to a PO (the warehouse team's reference convention), or it
+ * belongs to a PO outside the window / not in the portal at all.
+ */
+export async function getUnmatchedSalesOrders(windowDays = 30, limit = 200) {
+  const windowStart = new Date(Date.now() - windowDays * DAY);
+  const rows = await prisma.wmsSalesOrderMirror.findMany({
+    where: { poId: null, OR: [{ orderDate: { gte: windowStart } }, { orderDate: null }] },
+    orderBy: [{ orderDate: "desc" }],
+    take: limit,
+  });
+  return rows.map((m) => {
+    const lines = (m.lines ?? []) as Array<{ skuCode: string; qty: number }>;
+    return {
+      id: m.wmsSalesOrderId,
+      orderNo: m.orderNo,
+      refNo: m.refNo,
+      warehouseCode: m.warehouseCode,
+      customer: m.customer,
+      orderDate: m.orderDate,
+      status: m.status,
+      skuCount: lines.length,
+      totalQty: lines.reduce((a, l) => a + l.qty, 0),
+      linesKnown: m.linesKnown,
+    };
+  });
+}
+
+export type UnmatchedSalesOrder = Awaited<ReturnType<typeof getUnmatchedSalesOrders>>[number];

@@ -67,4 +67,10 @@ export async function register() {
   } catch (e) {
     console.error("[instrumentation] failed to start WMS stock auto-sync", e);
   }
+  try {
+    const { startSoCheckAutoRun } = await import("@/lib/services/so-check-scheduler");
+    startSoCheckAutoRun();
+  } catch (e) {
+    console.error("[instrumentation] failed to start SO entry check", e);
+  }
 }

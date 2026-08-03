@@ -23,7 +23,7 @@ export default async function DashboardLayout({
     if (!verifySession(jar.get(SESSION_COOKIE)?.value)) redirect("/sign-in");
   }
 
-  let counts = { pendingPos: 0, openDiscrepancies: 0 };
+  let counts = { pendingPos: 0, openDiscrepancies: 0, openSoChecks: 0 };
   let user: { label: string; email?: string } = { label: "Ops" };
   try {
     [counts, user] = await Promise.all([

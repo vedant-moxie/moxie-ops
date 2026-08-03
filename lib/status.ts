@@ -4,6 +4,7 @@ import type {
   DiscrepancyStatus,
   DiscrepancyType,
   DiscrepancyBaseline,
+  SoCheckResult,
 } from "@prisma/client";
 import type { BadgeProps } from "@/components/ui/badge";
 
@@ -71,6 +72,60 @@ export const DISCREPANCY_BASELINE_LABEL: Record<DiscrepancyBaseline, string> = {
   ASSIGNED: "vs assigned",
   ORDERED: "vs ordered",
 };
+
+/**
+ * SO Entry Check verdicts (plan 008). `hint` is the one-line "what's off" shown in
+ * the table so ops don't have to open the drawer to know what happened.
+ */
+export const SO_CHECK_META: Record<
+  SoCheckResult,
+  { label: string; variant: Variant; hint: string }
+> = {
+  MATCHED: { label: "Matched", variant: "success", hint: "SO matches the PO, SKU-wise" },
+  QTY_UNVERIFIED: {
+    label: "SO found",
+    variant: "info",
+    hint: "SO punched and traceable — WMS doesn't expose line quantities, so the SKU-wise check couldn't run",
+  },
+  QTY_MISMATCH: { label: "Qty mismatch", variant: "danger", hint: "Punched quantities differ from approved" },
+  DUPLICATE_SO: { label: "Duplicate SO", variant: "danger", hint: "Punched more than once — stock double-blocked" },
+  MISSING_SO: { label: "Missing SO", variant: "purple", hint: "No sales order punched for this PO" },
+  REF_MISSING: { label: "PO ref missing", variant: "warning", hint: "Quantities fine, a PO reference is absent" },
+  STALE_REVISION: { label: "Stale revision", variant: "warning", hint: "SO still matches the pre-revision numbers" },
+};
+
+/**
+ * Verdicts that need a human. Excludes MATCHED and QTY_UNVERIFIED — the latter is a
+ * limit of the WMS read path, not a warehouse mistake, so it must never read as a flag.
+ */
+export const SO_CHECK_PROBLEMS: SoCheckResult[] = [
+  "QTY_MISMATCH",
+  "DUPLICATE_SO",
+  "MISSING_SO",
+  "REF_MISSING",
+  "STALE_REVISION",
+];
+
+/**
+ * Worst-first sort order for the SO Entry Check list: what costs money or stops a
+ * dispatch sits at the top, clean rows at the bottom. `null` = no verdict yet
+ * ("awaiting punch"), which ranks after real problems but ahead of settled rows.
+ */
+const SO_CHECK_RANK: Record<SoCheckResult | "AWAITING", number> = {
+  MISSING_SO: 0, // nothing punched — nothing will ship
+  QTY_MISMATCH: 1, // wrong units will ship
+  DUPLICATE_SO: 2, // stock double-blocked
+  STALE_REVISION: 3,
+  REF_MISSING: 4, // right units, untraceable
+  AWAITING: 5, // still inside the punch window
+  QTY_UNVERIFIED: 6, // SO is there; quantities land after dispatch
+  MATCHED: 7,
+};
+
+/** Sort key for one row. Resolved rows sink below everything still open. */
+export function soCheckSortRank(result: SoCheckResult | null, resolved: boolean): number {
+  return SO_CHECK_RANK[result ?? "AWAITING"] + (resolved ? 100 : 0);
+}
 
 export const PRIORITY_META: Record<string, { label: string; variant: Variant }> = {
   P1: { label: "P1", variant: "danger" },
