@@ -23,6 +23,8 @@ const PO = {
   approvedAt: new Date("2026-08-01T06:00:00Z"),
 };
 const NOW = new Date("2026-08-03T06:00:00Z"); // 48h after approval
+/** SO history that predates the fixture PO, so coverage is not the thing under test. */
+const HISTORY_START_EARLY = new Date("2026-07-01T00:00:00Z");
 const APPROVED = [
   { skuCode: "GCS200", qty: 120 },
   { skuCode: "DRM300", qty: 60 },
@@ -127,21 +129,25 @@ assert.equal(both.result, "QTY_MISMATCH", "quantity outranks the reference check
 
 // ── missing SO watchdog ───────────────────────────────────────────────────
 
-assert.equal(check([])!.result, "MISSING_SO", "approved 48h ago with no SO");
 assert.equal(
-  check([], { now: new Date("2026-08-01T20:00:00Z") }),
+  check([], { soHistoryStart: HISTORY_START_EARLY })!.result,
+  "MISSING_SO",
+  "emailed 48h ago, inside our SO history, no SO found",
+);
+assert.equal(
+  check([], { now: new Date("2026-08-01T20:00:00Z"), soHistoryStart: HISTORY_START_EARLY }),
   null,
   "still inside the 24h SLA — no flag yet",
 );
 assert.equal(
-  check([], { soFeedFresh: false }),
+  check([], { soFeedFresh: false, soHistoryStart: HISTORY_START_EARLY }),
   null,
   "never flag MISSING_SO when the SO feed failed — that's our blind spot, not their mistake",
 );
 assert.equal(
-  check([], { po: { ...PO, approvedAt: null } }),
+  check([], { po: { ...PO, approvedAt: null }, soHistoryStart: HISTORY_START_EARLY }),
   null,
-  "no approval timestamp means the SLA clock never started",
+  "no email timestamp means the SLA clock never started",
 );
 
 // ── header-only source (the KPI feed): lines unknown, NOT zero ────────────
@@ -171,7 +177,11 @@ assert.equal(
 );
 
 // Missing SO is fully trustworthy on a header-only feed.
-assert.equal(check([])!.result, "MISSING_SO", "presence check unaffected by missing lines");
+assert.equal(
+  check([], { soHistoryStart: HISTORY_START_EARLY })!.result,
+  "MISSING_SO",
+  "presence check unaffected by missing lines",
+);
 
 // Two SOs with no quantities: a double-punch and a valid split punch are
 // indistinguishable, so this must NOT be flagged as DUPLICATE_SO.
@@ -191,17 +201,51 @@ assert.equal(mixed.qtyComparable, false);
 assert.equal(check([goodSo()])!.result, "MATCHED", "upgrades to MATCHED when lines arrive");
 assert.equal(check([goodSo()])!.qtyComparable, true);
 
+// ── never flag a PO from before our SO history ────────────────────────────
+// First production run flagged 348 of 348 POs as MISSING_SO: the mirror held only the
+// 35 currently-undispatched SOs, so every older PO looked unpunched. Both WMS feeds are
+// recent-only, so outside our coverage there is simply nothing to conclude.
+
+const HISTORY_START = new Date("2026-08-01T00:00:00Z");
+const missing = (over: Partial<Parameters<typeof evaluateSoCheck>[0]> = {}) =>
+  check([], { soHistoryStart: HISTORY_START, ...over });
+
+assert.equal(
+  missing({ po: { ...PO, approvedAt: new Date("2026-07-20T06:00:00Z") } }),
+  null,
+  "PO emailed before our SO history starts — cannot be judged, so no flag",
+);
+assert.equal(
+  missing()!.result,
+  "MISSING_SO",
+  "PO emailed after history starts, past SLA, no SO — a real missing punch",
+);
+assert.equal(
+  check([], { soHistoryStart: null }),
+  null,
+  "empty mirror (fresh deployment) flags nothing at all",
+);
+assert.equal(
+  check([], { soHistoryStart: undefined }),
+  null,
+  "unknown coverage is treated as no coverage, not as full coverage",
+);
+
 // ── an already-shipped PO must not be nagged about a missing SO ───────────
 // Ops complaint: a PO showing status "Closed" was listed as "Awaiting punch". If the
 // goods dispatched and were received, a missing SO is our mirror aging out, not the
 // warehouse forgetting — so it must stay silent.
 
 assert.equal(
-  check([], { shipped: true }),
+  check([], { shipped: true, soHistoryStart: HISTORY_START }),
   null,
   "no MISSING_SO once the goods have shipped",
 );
-assert.equal(check([], { shipped: false })!.result, "MISSING_SO", "…but still flagged before dispatch");
+assert.equal(
+  check([], { shipped: false, soHistoryStart: HISTORY_START })!.result,
+  "MISSING_SO",
+  "…but still flagged before dispatch",
+);
 // Quantity and reference checks DO still run on a shipped PO when an SO is found.
 assert.equal(
   check([goodSo({ lines: [{ skuCode: "GCS200", qty: 100 }] })], { shipped: true })!.result,

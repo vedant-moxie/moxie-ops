@@ -131,8 +131,14 @@ export function evaluateSoCheck(input: {
   soFeedFresh: boolean;
   /** True once the goods have left — suppresses MISSING_SO (see SHIPPED_STATUSES). */
   shipped?: boolean;
+  /**
+   * Oldest sales order we hold. A PO emailed before this can't be judged: its SO was
+   * punched and dispatched before we ever started collecting, so its absence from our
+   * mirror says nothing. Null (no SOs at all) means judge nothing.
+   */
+  soHistoryStart?: Date | null;
 }): SoCheckEvaluation | null {
-  const { po, approved, sos, now, soFeedFresh, shipped } = input;
+  const { po, approved, sos, now, soFeedFresh, shipped, soHistoryStart } = input;
   const slaHours = input.missingSlaHours ?? 24;
 
   const ourBySku = new Map<string, number>();
@@ -185,6 +191,12 @@ export function evaluateSoCheck(input: {
     if (shipped) return null;
     const toldAt = po.approvedAt?.getTime();
     if (!toldAt || now.getTime() - toldAt < slaHours * 3_600_000) return null;
+    // Outside our SO history there is nothing to conclude from. Both WMS feeds are
+    // recent-only (undispatched SOs, plus a rolling dispatched window), so a PO emailed
+    // before our earliest mirrored SO had its punch happen where we cannot see. Without
+    // this guard a fresh deployment flags every historical PO at once — 348 of 348 on
+    // the first production run — which is noise, not a finding.
+    if (!soHistoryStart || toldAt < soHistoryStart.getTime()) return null;
     return { ...base, result: "MISSING_SO" };
   }
 

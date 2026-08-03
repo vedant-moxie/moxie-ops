@@ -38,7 +38,12 @@ export async function getNavCounts() {
     prisma.discrepancy.count({ where: { status: { in: ["OPEN", "DISPUTED"] } } }),
     prisma.soCheck.count({
       // QTY_UNVERIFIED is a read-path limit, not a warehouse mistake — never badge it.
-      where: { result: { notIn: ["MATCHED", "QTY_UNVERIFIED"] }, resolvedAt: null },
+      // Closed POs are off this page entirely, so their leftovers never badge either.
+      where: {
+        result: { notIn: ["MATCHED", "QTY_UNVERIFIED"] },
+        resolvedAt: null,
+        po: { status: { not: "CLOSED" } },
+      },
     }),
   ]);
   return { pendingPos, openDiscrepancies, openSoChecks };
@@ -671,8 +676,15 @@ export async function getSoCheckRows(windowDays = 30) {
   const windowStart = new Date(Date.now() - windowDays * DAY);
   const pos = await prisma.purchaseOrder.findMany({
     where: {
-      status: { in: ["APPROVED", "DISPATCHED", "DELIVERED", "GRN_RECEIVED", "CLOSED", "DISCREPANCY"] },
-      OR: [{ approvedAt: { gte: windowStart } }, { approvedAt: null, updatedAt: { gte: windowStart } }],
+      // CLOSED is excluded on purpose (ops): a delivered, GRN'd, invoiced PO is settled
+      // history and must not show up here. ALLOCATED is included because that is the
+      // status allocate-and-email sets when the warehouse is told to punch.
+      status: { in: ["ALLOCATED", "APPROVED", "DISPATCHED", "DELIVERED", "GRN_RECEIVED", "DISCREPANCY"] },
+      OR: [
+        { emailSentAt: { gte: windowStart } },
+        { emailSentAt: null, approvedAt: { gte: windowStart } },
+        { emailSentAt: null, approvedAt: null, updatedAt: { gte: windowStart } },
+      ],
     },
     select: {
       id: true,

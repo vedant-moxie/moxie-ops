@@ -36,6 +36,8 @@ export interface SoVerificationResult {
   salesOrders: number;
   posChecked: number;
   flagged: number;
+  /** Verdicts removed because the PO is no longer judgeable (see the null branch). */
+  cleared: number;
   byResult: Partial<Record<SoCheckResult, number>>;
   error?: string;
 }
@@ -53,9 +55,16 @@ const CHECKED_STATUSES = [
   "DISPATCHED",
   "DELIVERED",
   "GRN_RECEIVED",
-  "CLOSED",
   "DISCREPANCY",
 ] as const;
+
+/**
+ * CLOSED is deliberately absent (ops decision): the PO is delivered, GRN'd and invoiced,
+ * so whether its sales order was punched correctly is settled history. Closed POs must
+ * not appear on the SO Entry Check page at all — see the cleanup below, which removes
+ * verdicts written before a PO closed so a stale flag can't linger in the sidebar count.
+ */
+const CLOSED_STATUS = "CLOSED";
 
 /**
  * States where the goods have demonstrably already left. A missing SO here is a gap in
@@ -81,7 +90,7 @@ export function verifySalesOrders(opts: { withLines?: boolean } = {}): Promise<S
 }
 
 async function doVerify(opts: { withLines?: boolean }): Promise<SoVerificationResult> {
-  const empty = { salesOrders: 0, posChecked: 0, flagged: 0, byResult: {} };
+  const empty = { salesOrders: 0, posChecked: 0, flagged: 0, cleared: 0, byResult: {} };
   if (!wmsConfigured()) {
     return { ok: false, ...empty, error: "WMS_EMAIL / WMS_PASSWORD not set" };
   }
@@ -162,7 +171,20 @@ async function doVerify(opts: { withLines?: boolean }): Promise<SoVerificationRe
     partyRefOrderNo: m.partyRefOrderNo,
     lines: (m.lines ?? []) as unknown as SoLine[],
     linesKnown: m.linesKnown,
+    orderDate: m.orderDate,
   }));
+
+  // How far back our SO knowledge actually reaches. Both feeds are recent-only, so a
+  // PO emailed before this cannot be judged for a missing SO (see evaluateSoCheck).
+  const soHistoryStart = mirrors.reduce<Date | null>((oldest, m) => {
+    const d = m.orderDate;
+    return d && (!oldest || d < oldest) ? d : oldest;
+  }, null);
+  if (soHistoryStart) {
+    console.info(`[so-check] SO history reaches back to ${soHistoryStart.toISOString().slice(0, 10)}`);
+  } else {
+    console.warn("[so-check] no mirrored SOs yet — missing-SO flags stay off until history exists");
+  }
 
   // One EAN lookup for every line in the window rather than one per PO.
   const eanMap = await mapEansToInternal(
@@ -173,6 +195,7 @@ async function doVerify(opts: { withLines?: boolean }): Promise<SoVerificationRe
   const matchedIds = new Set<string>();
   let flagged = 0;
   let posChecked = 0;
+  let cleared = 0;
 
   for (const po of pos) {
     const matched = mirrors.filter((so) => soMatchesPo(so, po));
@@ -202,13 +225,24 @@ async function doVerify(opts: { withLines?: boolean }): Promise<SoVerificationRe
       // The punch is expected once the warehouse has the email, so that is the clock.
       po: { ...po, approvedAt: po.emailSentAt ?? po.approvedAt },
       shipped: SHIPPED_STATUSES.has(po.status),
+      soHistoryStart,
       approved,
       sos: matched,
       now: fetchedAt,
       missingSlaHours: env.SO_MISSING_SLA_HOURS,
       soFeedFresh: true, // we got here, so the read-back succeeded
     });
-    if (!evaluation) continue; // not due yet — no row, PO shows as "awaiting punch"
+    if (!evaluation) {
+      // Nothing to conclude any more (still inside the SLA, already shipped, or outside
+      // our SO history). Clear any verdict left from an earlier run, or a stale flag
+      // would sit on the page forever — the first production run wrote 348 MISSING_SO
+      // rows this way before the coverage guard existed.
+      if (await prisma.soCheck.findUnique({ where: { poId: po.id }, select: { poId: true } })) {
+        await prisma.soCheck.delete({ where: { poId: po.id } });
+        cleared++;
+      }
+      continue; // PO shows as "awaiting punch"
+    }
 
     posChecked++;
     byResult[evaluation.result] = (byResult[evaluation.result] ?? 0) + 1;
@@ -243,6 +277,15 @@ async function doVerify(opts: { withLines?: boolean }): Promise<SoVerificationRe
     });
   }
 
+  // A PO that has since closed keeps no verdict — it has left this page for good.
+  const closedCleanup = await prisma.soCheck.deleteMany({
+    where: { po: { status: CLOSED_STATUS } },
+  });
+  if (closedCleanup.count > 0) {
+    cleared += closedCleanup.count;
+    console.info(`[so-check] dropped ${closedCleanup.count} verdicts on now-closed POs`);
+  }
+
   const unmatched = mirrors.filter((m) => !matchedIds.has(m.salesOrderId)).length;
   if (unmatched > 0) {
     // SOs nobody could match are their own signal — a reference we don't recognise
@@ -251,10 +294,11 @@ async function doVerify(opts: { withLines?: boolean }): Promise<SoVerificationRe
   }
 
   console.info(
-    `[so-check] ${sos.length} SOs read, ${posChecked} POs checked, ${flagged} flagged`,
+    `[so-check] ${sos.length} SOs read, ${posChecked} POs checked, ${flagged} flagged` +
+      (cleared > 0 ? `, ${cleared} stale verdicts cleared` : ""),
     byResult,
   );
-  return { ok: true, salesOrders: sos.length, posChecked, flagged, byResult };
+  return { ok: true, salesOrders: sos.length, posChecked, flagged, cleared, byResult };
 }
 
 /**
