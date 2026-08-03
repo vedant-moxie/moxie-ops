@@ -17,6 +17,7 @@ import { prisma } from "@/lib/db";
 import { validatePoTaxables } from "@/lib/services/taxable-validation";
 import { resolveLineInternalSku, pvIdFromRaw } from "@/lib/services/sku-resolver";
 import { computeFillRates } from "@/lib/services/fill-rate";
+import { SO_CHECK_META } from "@/lib/status";
 import { cn, formatINR, formatDate, formatDateTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +33,7 @@ export default async function OrderDetailPage({ params }: { params: { id: string
       deliveryRecord: true,
       grnRecord: { include: { lineItems: true, discrepancies: true } },
       invoice: true,
+      soCheck: true,
     },
   });
   if (!poBase) notFound();
@@ -121,6 +123,22 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                 <div className="text-xs text-muted-foreground">Email reference</div>
                 <div className="font-medium font-mono">{po.emailRef}</div>
                 <div className="mt-0.5"><EmailStatusBadge status={po.emailStatus} sentAt={po.emailSentAt} /></div>
+              </div>
+            )}
+            {po.soCheck && (
+              <div>
+                <div className="text-xs text-muted-foreground">WMS sales order</div>
+                <div className="mt-0.5">
+                  <Link href="/reconciliation/so-check">
+                    <Badge variant={SO_CHECK_META[po.soCheck.result].variant}>
+                      {SO_CHECK_META[po.soCheck.result].label}
+                    </Badge>
+                  </Link>
+                </div>
+                <div className="mt-0.5 text-xs text-muted-foreground nums">
+                  {po.soCheck.ourQty} ours → {po.soCheck.wmsQty} punched
+                  {po.soCheck.resolvedAt && " · resolved"}
+                </div>
               </div>
             )}
             <div className="ml-auto flex flex-wrap gap-2">

@@ -177,6 +177,7 @@ model PurchaseOrder {
   deliveryRecord       DeliveryRecord?
   grnRecord            GrnRecord?
   invoice              Invoice?
+  soCheck              SoCheck?
 
   @@index([channelId])
   @@index([status])
@@ -282,6 +283,69 @@ model WarehouseStock {
 
   @@unique([warehouseCode, skuCode])
   @@index([skuCode])
+}
+
+/// Mirror of the sales orders the warehouse team punched into the WMS, read back
+/// through the portal API. A cache, never a source of truth — fully rebuildable,
+/// so a failed fetch must leave existing rows alone rather than clear them.
+/// `lines` is [{ skuCode, qty }] with skuCode as our internal master code.
+model WmsSalesOrderMirror {
+  id              String    @id @default(cuid())
+  wmsSalesOrderId String    @unique // SO id / number as the WMS reports it
+  orderNo         String? // order_no — should carry the channel PO number
+  refNo           String? // salesorder_ref_no — should carry our MB email ref
+  partyRefOrderNo String? // party_ref_order_no — third reference field the SO carries
+  warehouseCode   String? // our registry code (lib/warehouses.ts); null when unmapped
+  orderDate       DateTime?
+  status          String?
+  lines           Json
+  /// False when the source gave headers only (the KPI feed) — `lines` is then `[]`
+  /// meaning UNKNOWN, not zero. Guards the quantity comparison from reading a punched
+  /// SO as a total shortfall.
+  linesKnown      Boolean   @default(true)
+  customer        String? // destination as the WMS records it, for human identification
+  poId            String? // matched PO — no FK: an SO can outlive or precede any PO row
+  fetchedAt       DateTime
+
+  @@index([orderNo])
+  @@index([refNo])
+  @@index([poId])
+}
+
+/// Result of comparing a PO's approved quantities against the SO punched in WMS.
+/// STALE_REVISION is emitted only once revision arrival is wired (plan 008 Phase 6).
+enum SoCheckResult {
+  MATCHED
+  QTY_MISMATCH
+  REF_MISSING
+  MISSING_SO
+  DUPLICATE_SO
+  STALE_REVISION
+  /// SO found and traceable, but the read path exposed no line quantities so the
+  /// SKU-wise match could not run. This is the best verdict the KPI feed can give;
+  /// it upgrades to MATCHED / QTY_MISMATCH automatically once SO lines are readable.
+  QTY_UNVERIFIED
+}
+
+/// Latest SO-entry verification per PO — one row, upserted on every run, so a PO
+/// the warehouse team fixes in WMS flips back to MATCHED with no action on our
+/// side. A manual resolution is kept while the result is unchanged and cleared
+/// automatically when the result changes (a new problem needs a fresh look).
+model SoCheck {
+  poId       String        @id
+  result     SoCheckResult
+  ourQty     Int           @default(0) // approved units across all SKUs
+  wmsQty     Int           @default(0) // units on the matched SO(s)
+  soCount    Int           @default(0) // matched SOs (>1 is a valid split punch)
+  diff       Json? // [{ skuCode, ourQty, wmsQty }] — only SKUs that differ
+  checkedAt  DateTime
+  resolvedAt DateTime?
+  resolvedBy String?
+  note       String?
+
+  po PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+
+  @@index([result])
 }
 
 model WarehouseInstruction {

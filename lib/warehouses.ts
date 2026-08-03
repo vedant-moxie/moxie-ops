@@ -20,6 +20,12 @@ export interface WarehouseInfo {
   wmsName: string;
   /** warehouse_code in the WMS account (used for sales-order push) */
   wmsCode: string;
+  /**
+   * Numeric warehouse id in the WMS portal (`common/warehouse/filllist`). Needed to
+   * scope the portal's dashboard KPI feed and to switch the account's default warehouse
+   * before running the Outward LOI Report, whose own warehouse parameter is disabled.
+   */
+  portalWarehouseId: number;
 }
 
 export const WAREHOUSES: readonly WarehouseInfo[] = [
@@ -30,6 +36,7 @@ export const WAREHOUSES: readonly WarehouseInfo[] = [
     dispatchFrom: "RGL NCR",
     wmsName: "RGL GURGAON HARYANA",
     wmsCode: "G",
+    portalWarehouseId: 135,
   },
   {
     code: "BLR",
@@ -38,6 +45,7 @@ export const WAREHOUSES: readonly WarehouseInfo[] = [
     dispatchFrom: "RGL BLR",
     wmsName: "RGL BENGALURU",
     wmsCode: "BLR",
+    portalWarehouseId: 5,
   },
   {
     code: "MUM",
@@ -46,6 +54,7 @@ export const WAREHOUSES: readonly WarehouseInfo[] = [
     dispatchFrom: "RGL MUM",
     wmsName: "BHIWANDI - 2",
     wmsCode: "WD",
+    portalWarehouseId: 11,
   },
 ];
 
