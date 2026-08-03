@@ -122,14 +122,17 @@ export function soMatchesPo(
  * cannot tell "not punched" from "not fetched", so nothing is flagged.
  */
 export function evaluateSoCheck(input: {
+  /** `approvedAt` here is the moment the warehouse was told to punch (the prep email). */
   po: { channelPoNumber: string | null; emailRef: string | null; approvedAt: Date | null };
   approved: SoLine[];
   sos: MatchableSo[];
   now: Date;
   missingSlaHours?: number;
   soFeedFresh: boolean;
+  /** True once the goods have left — suppresses MISSING_SO (see SHIPPED_STATUSES). */
+  shipped?: boolean;
 }): SoCheckEvaluation | null {
-  const { po, approved, sos, now, soFeedFresh } = input;
+  const { po, approved, sos, now, soFeedFresh, shipped } = input;
   const slaHours = input.missingSlaHours ?? 24;
 
   const ourBySku = new Map<string, number>();
@@ -176,8 +179,12 @@ export function evaluateSoCheck(input: {
 
   if (sos.length === 0) {
     if (!soFeedFresh) return null;
-    const approvedAt = po.approvedAt?.getTime();
-    if (!approvedAt || now.getTime() - approvedAt < slaHours * 3_600_000) return null;
+    // Already dispatched/received: the stock demonstrably moved, so a missing SO is our
+    // mirror aging out, not the warehouse forgetting. Saying "awaiting punch" on a
+    // closed PO is noise.
+    if (shipped) return null;
+    const toldAt = po.approvedAt?.getTime();
+    if (!toldAt || now.getTime() - toldAt < slaHours * 3_600_000) return null;
     return { ...base, result: "MISSING_SO" };
   }
 

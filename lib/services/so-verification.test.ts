@@ -191,6 +191,24 @@ assert.equal(mixed.qtyComparable, false);
 assert.equal(check([goodSo()])!.result, "MATCHED", "upgrades to MATCHED when lines arrive");
 assert.equal(check([goodSo()])!.qtyComparable, true);
 
+// ── an already-shipped PO must not be nagged about a missing SO ───────────
+// Ops complaint: a PO showing status "Closed" was listed as "Awaiting punch". If the
+// goods dispatched and were received, a missing SO is our mirror aging out, not the
+// warehouse forgetting — so it must stay silent.
+
+assert.equal(
+  check([], { shipped: true }),
+  null,
+  "no MISSING_SO once the goods have shipped",
+);
+assert.equal(check([], { shipped: false })!.result, "MISSING_SO", "…but still flagged before dispatch");
+// Quantity and reference checks DO still run on a shipped PO when an SO is found.
+assert.equal(
+  check([goodSo({ lines: [{ skuCode: "GCS200", qty: 100 }] })], { shipped: true })!.result,
+  "QTY_MISMATCH",
+  "a shipped PO with a real quantity difference is still reported",
+);
+
 // ── a weaker source must never erase a stronger one ───────────────────────
 // The hourly KPI feed has no quantities and one reference field; the daily Outward LOI
 // report has both. Without this merge the hourly run would wipe the daily run's

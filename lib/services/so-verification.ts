@@ -40,8 +40,15 @@ export interface SoVerificationResult {
   error?: string;
 }
 
-/** PO states where a sales order should already exist in the WMS. */
+/**
+ * PO states where a sales order should already exist in the WMS.
+ *
+ * ALLOCATED is the important one: allocate-and-email.ts sets status=ALLOCATED (not
+ * APPROVED) at the moment the PO-preparation email goes to the warehouse, which is
+ * exactly when the punch is expected. APPROVED comes from the separate approve route.
+ */
 const CHECKED_STATUSES = [
+  "ALLOCATED",
   "APPROVED",
   "DISPATCHED",
   "DELIVERED",
@@ -49,6 +56,14 @@ const CHECKED_STATUSES = [
   "CLOSED",
   "DISCREPANCY",
 ] as const;
+
+/**
+ * States where the goods have demonstrably already left. A missing SO here is a gap in
+ * our mirror (the SO aged out of the WMS feeds), not a warehouse failure — the stock
+ * moved, so flagging it is noise. Quantity and reference checks still run when an SO
+ * IS found.
+ */
+const SHIPPED_STATUSES = new Set(["DISPATCHED", "DELIVERED", "GRN_RECEIVED", "CLOSED"]);
 
 // One run at a time per instance; concurrent callers await the same promise.
 let inflight: Promise<SoVerificationResult> | null = null;
@@ -88,14 +103,20 @@ async function doVerify(opts: { withLines?: boolean }): Promise<SoVerificationRe
   const pos = await prisma.purchaseOrder.findMany({
     where: {
       status: { in: [...CHECKED_STATUSES] },
-      OR: [{ approvedAt: { gte: windowStart } }, { approvedAt: null, updatedAt: { gte: windowStart } }],
+      OR: [
+        { emailSentAt: { gte: windowStart } },
+        { emailSentAt: null, approvedAt: { gte: windowStart } },
+        { emailSentAt: null, approvedAt: null, updatedAt: { gte: windowStart } },
+      ],
     },
     select: {
       id: true,
       source: true,
+      status: true,
       channelPoNumber: true,
       emailRef: true,
       approvedAt: true,
+      emailSentAt: true,
       lineItems: {
         select: {
           approvedQty: true,
@@ -178,7 +199,9 @@ async function doVerify(opts: { withLines?: boolean }): Promise<SoVerificationRe
     }
 
     const evaluation = evaluateSoCheck({
-      po,
+      // The punch is expected once the warehouse has the email, so that is the clock.
+      po: { ...po, approvedAt: po.emailSentAt ?? po.approvedAt },
+      shipped: SHIPPED_STATUSES.has(po.status),
       approved,
       sos: matched,
       now: fetchedAt,
